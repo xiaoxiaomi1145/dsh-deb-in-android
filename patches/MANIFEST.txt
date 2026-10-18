@@ -1,0 +1,14 @@
+base_tag=dsh-v0.2.1-rc.2
+base_commit=687f282e8625c6b8d11ff58211a90524be2e4317
+generated=2026-10-18T22:02:48+08:00
+repo=/data/data/com.termux/files/home/deepseek-harness
+
+5c6ef68b66298b81c30242fee7a9f8c83c934ebe6695e7165a49da96b58efb49  01-plugin-manager-hang.patch  3 files
+95fdf7ef23357435a55b435035bab4c98aac9fe418a66df51ac563823ab03321  02-telemetry-rows.patch  4 files
+00ebcfbc1f9bec156cd57f7a8d86643fbc34811bfa8ab2d481e39dd48330eea8  03-termux-fs.patch  5 files
+b4c92f4b0594675103b7668aa82ab115a13035d8f20fc302227ade3aea2fb0e8  04-session-jsonl.patch  2 files
+c40e45997cfe800a9718bf1dcea4988fe9829da9af1b0d4da4d843286541fa61  05-native-android.patch  4 files
+b767fc333f394d0dcdc2de209fda517ce79b6c46e08e3ff9a763155f15154404  06-perf-misc.patch  6 files
+0bf74ced9292d165de741407bd2699f714ba58967323f7d8e656e14fd183699a  07-bundle-purge.patch  11 files
+4bd50118ac5f0f7e83bf9c67b6dbd3b38c816eaee034e6feb43cb2522a0691e9  08-lockfile.patch  1 files
+c6e46f1805dba2e53ccd647f053132096f36e713b10bf9767b86178ac4874af1  09-web-worker-context.patch  1 files

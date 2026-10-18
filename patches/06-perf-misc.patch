@@ -1,0 +1,300 @@
+diff --git a/packages/attachment/attachment-local/src/store.ts b/packages/attachment/attachment-local/src/store.ts
+index 7fab679e34..431423e6a4 100644
+--- a/packages/attachment/attachment-local/src/store.ts
++++ b/packages/attachment/attachment-local/src/store.ts
+@@ -2,7 +2,7 @@
+ 
+ import { createHash, randomUUID } from 'node:crypto'
+ import { constants, createReadStream } from 'node:fs'
+-import { chmod, link, mkdir, open, readFile, unlink } from 'node:fs/promises'
++import { chmod, copyFile, link, mkdir, open, readFile, unlink } from 'node:fs/promises'
+ import { dirname, join, parse, resolve } from 'node:path'
+ import {
+   AttachmentError,
+@@ -133,7 +133,20 @@ async function syncDirectory(path: string): Promise<void> {
+   /* v8 ignore next -- Windows cannot open directory handles; NTFS metadata journaling owns entry durability there. */
+   if (process.platform === 'win32') return
+   /* v8 ignore start -- Windows cannot exercise directory fsync; POSIX behavior tests enforce this peer. */
+-  const handle = await open(path, constants.O_RDONLY)
++  let handle
++  try {
++    handle = await open(path, constants.O_RDONLY)
++  } catch (error) {
++    // Some sandboxes refuse to open a directory outside the app's own tree
++    // even though the entry is traversable and stat-able: Android's
++    // untrusted_app domain does this for `/`, `/data`, and `/data/data`.
++    // Those system directories sit on storage whose own metadata journaling
++    // already owns their entry durability, so a refused ancestor degrades to
++    // the same no-op as the Windows branch instead of failing an otherwise
++    // valid publication. A real I/O fault still propagates.
++    if (error instanceof Error && 'code' in error && (error.code === 'EACCES' || error.code === 'EPERM')) return
++    throw error
++  }
+   try {
+     await handle.sync()
+   } finally {
+@@ -142,6 +155,29 @@ async function syncDirectory(path: string): Promise<void> {
+   /* v8 ignore stop */
+ }
+ 
++/**
++ * Publish one name for an already-written file without a hard link.
++ * Hard links are the cheap way to give one immutable object several names, but
++ * some platforms forbid `link()` outright: Android's untrusted_app domain
++ * denies it for every path, including two names in the same directory. Falling
++ * back to an exclusive byte copy preserves the caller-visible contract the
++ * link path implements — the target appears atomically and never overwrites an
++ * existing object, because `COPYFILE_EXCL` reports the same `EEXIST` a link
++ * race would.
++ * @param source - existing file to publish under another name.
++ * @param target - new absolute name; must not already exist.
++ * @throws the original link error when copying is refused for an unrelated reason.
++ */
++async function linkOrCopyExclusive(source: string, target: string): Promise<void> {
++  try {
++    await link(source, target)
++    return
++  } catch (error) {
++    if (!(error instanceof Error && 'code' in error && (error.code === 'EACCES' || error.code === 'EPERM'))) throw error
++  }
++  await copyFile(source, target, constants.COPYFILE_EXCL)
++}
++
+ /**
+  * Create one private directory tree and persist every ancestor entry up to a
+  * caller-vouched durable boundary. The walk deliberately ignores what mkdir
+@@ -280,7 +316,7 @@ export async function publishImmutableAlias(
+     const boundary = await ensureDurableHome(dirname(dirname(resolve(root))))
+     await ensureDurableDirectory(parent, boundary)
+     try {
+-      await link(source, target)
++      await linkOrCopyExclusive(source, target)
+     } catch (error) {
+       /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+@@ -356,7 +392,7 @@ async function publishStagedObject(
+   try {
+     await ensureDurableDirectory(parent, staged.boundary)
+     try {
+-      await link(staged.path, target)
++      await linkOrCopyExclusive(staged.path, target)
+     } catch (error) {
+       /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+diff --git a/packages/attachment/attachment-local/tests/file-store.spec.ts b/packages/attachment/attachment-local/tests/file-store.spec.ts
+index dde6ec2d06..27c08650b1 100644
+--- a/packages/attachment/attachment-local/tests/file-store.spec.ts
++++ b/packages/attachment/attachment-local/tests/file-store.spec.ts
+@@ -1,5 +1,5 @@
+ import { createHash } from 'node:crypto'
+-import { chmod, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
++import { chmod, link, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+ import { mkdtemp, rm } from 'node:fs/promises'
+@@ -35,6 +35,30 @@ async function readStream(stream: AsyncIterable<Uint8Array>): Promise<Uint8Array
+   return new Uint8Array(Buffer.concat(chunks))
+ }
+ 
++let hardLinksUsable: Promise<boolean> | undefined
++
++/**
++ * Android's SELinux policy denies `link(2)` outright, so the store degrades to
++ * an exclusive byte copy and published aliases stop sharing an inode. Probe the
++ * scratch filesystem once so the alias assertions can match the mechanism the
++ * platform actually honours.
++ */
++function hardLinksWork(): Promise<boolean> {
++  hardLinksUsable ??= (async () => {
++    const probe = await mkdtemp(join(tmpdir(), 'dsh-link-probe-'))
++    try {
++      await writeFile(join(probe, 'source'), 'probe')
++      await link(join(probe, 'source'), join(probe, 'alias'))
++      return true
++    } catch {
++      return false
++    } finally {
++      await rm(probe, { recursive: true, force: true })
++    }
++  })()
++  return hardLinksUsable
++}
++
+ describe('fileLeafName', () => {
+   it('keeps ordinary names and strips client paths of both separator styles', () => {
+     expect(fileLeafName('notes.pdf')).toBe('notes.pdf')
+@@ -112,10 +136,21 @@ describe('saveFileVerbatim', () => {
+     expect(again).toEqual(first)
+     const renamed = await saveFileVerbatim(root, { data, name: 'b.txt' })
+     expect(renamed.attachmentId).toBe(first.attachmentId)
+-    expect((await stat(storedFilePath(root, first))).ino)
+-      .toBe((await stat(storedFilePath(root, renamed))).ino)
++    const firstAlias = storedFilePath(root, first)
++    const renamedAlias = storedFilePath(root, renamed)
++    if (await hardLinksWork()) {
++      expect((await stat(firstAlias)).ino).toBe((await stat(renamedAlias)).ino)
++    } else {
++      // The degraded path copies bytes instead of sharing an inode, so prove the
++      // aliases are separate files that still carry identical content.
++      expect((await stat(firstAlias)).ino).not.toBe((await stat(renamedAlias)).ino)
++      await expect(readFile(renamedAlias)).resolves.toEqual(await readFile(firstAlias))
++    }
+     const digestDir = join(root, 'files', sha256(data).slice(0, 2), sha256(data))
+     expect((await readdir(digestDir)).sort()).toEqual(['a.txt', 'b.txt'])
++    // One content-addressed object per digest, whichever publication path ran.
++    expect(await readdir(join(root, 'file-objects', sha256(data).slice(0, 2))))
++      .toEqual([sha256(data)])
+   })
+ 
+   it('refuses a stored object whose bytes no longer match the digest', async () => {
+diff --git a/packages/boot/config-editor/src/index.ts b/packages/boot/config-editor/src/index.ts
+index ffec879f40..af686bb41f 100644
+--- a/packages/boot/config-editor/src/index.ts
++++ b/packages/boot/config-editor/src/index.ts
+@@ -52,17 +52,33 @@ export class ConfigEditor extends Service {
+     const entries = this.entries()
+     // An own config key can replace inherited config even when its value is undefined.
+     const overridden = new Set(loaded.patches.filter(patch => patch.insert === undefined && Object.hasOwn(patch, 'config')).map(patch => patch.id))
++    const layerPatches = loaded.layers.map(layer => layer.patches)
++    // Patches address one id each, so a row's inherited config never depends on
++    // another row's own config: one composition answers every row instead of
++    // one deep clone per overridden entry.
+     const composed = new Map<string, EntryOptions>()
+-    if (entries.some(entry => !overridden.has(entry.options.id))) {
+-      for (const row of flatten(composeEntries([...loaded.layers.map(layer => layer.patches), loaded.patches]))) {
+-        if (!composed.has(row.id)) composed.set(row.id, row)
++    for (const row of flatten(composeEntries([...layerPatches, loaded.patches]))) {
++      if (row.id !== undefined && !composed.has(row.id)) composed.set(row.id, row)
++    }
++    const inheritedRows = new Map<string, EntryOptions>()
++    if (overridden.size > 0) {
++      // A group row's config is its child list, so only leaf own configs drop out.
++      const withoutOwnConfigs = loaded.patches.map((patch) => {
++        if (patch.insert !== undefined || !Object.hasOwn(patch, 'config')) return patch
++        if (patch.id !== undefined && composed.get(patch.id)?.group === true) return patch
++        const rest = { ...patch }
++        Reflect.deleteProperty(rest, 'config')
++        return rest
++      })
++      for (const row of flatten(composeEntries([...layerPatches, withoutOwnConfigs]))) {
++        if (row.id !== undefined && !inheritedRows.has(row.id)) inheritedRows.set(row.id, row)
+       }
+     }
+     return entries.map(entry => ({
+       entry,
+-      inherited: overridden.has(entry.options.id)
+-        ? this.inherited(entry, loaded)
+-        : structuredClone((composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
++      inherited: structuredClone((overridden.has(entry.options.id)
++        ? inheritedRows.get(entry.options.id)?.config ?? {}
++        : composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
+       override: structuredClone((loaded.patches.findLast(
+         row => row.id === entry.options.id && row.config !== undefined,
+       )?.config ?? {}) as Record<string, unknown>),
+diff --git a/packages/core/agent-loop/src/assistant-stream.ts b/packages/core/agent-loop/src/assistant-stream.ts
+index 8cbcc9e3c2..08cc5af91e 100644
+--- a/packages/core/agent-loop/src/assistant-stream.ts
++++ b/packages/core/agent-loop/src/assistant-stream.ts
+@@ -14,6 +14,28 @@ import {
+ import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
+ import type { SessionEventMap, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
+ 
++/**
++ * Context-compression plugins (e.g. billion-context) annotate history
++ * messages with `<acp tokens="…" type="…">mNNNNN</acp>` envelopes. Models
++ * occasionally imitate the envelope at the start of a reply; those
++ * system-metadata tags must never reach the durable message or the UI.
++ */
++const ENVELOPE_ECHO = /^\s*<acp\b[^>]*>[^<]*<\/acp>/i
++
++function stripEnvelopeEcho(block: ContentBlock): ContentBlock {
++  if (block.type !== 'text') return block
++  let text = block.text
++  let matched = false
++  for (;;) {
++    const match = ENVELOPE_ECHO.exec(text)
++    if (match === null) break
++    matched = true
++    text = text.slice(match[0].length)
++  }
++  if (!matched) return block
++  return { ...block, text: text.replace(/^\r?\n/, '') }
++}
++
+ /** Folds one model attempt into one compact stream plus ordered transient frames. */
+ export class AssistantStreamAttempt {
+   private readonly accumulator = new AssistantStreamAccumulator()
+@@ -115,12 +137,12 @@ export class AssistantStreamAttempt {
+ 
+   /** Canonical completed-message blocks from the same chunks. */
+   blocks(): ContentBlock[] {
+-    return this.assembler.blocks()
++    return this.assembler.blocks().map(stripEnvelopeEcho)
+   }
+ 
+   /** Safe visible prefix when cancellation interrupts the attempt. */
+   interruptedBlocks(): ContentBlock[] {
+-    return this.assembler.interruptedBlocks()
++    return this.assembler.interruptedBlocks().map(stripEnvelopeEcho)
+   }
+ 
+   /** Latest adapter-reported usage in the stream. */
+diff --git a/packages/util/values/src/index.ts b/packages/util/values/src/index.ts
+index 8664da7e34..b2b2b2038b 100644
+--- a/packages/util/values/src/index.ts
++++ b/packages/util/values/src/index.ts
+@@ -14,15 +14,37 @@ export function assertNever(value: never, context?: string): never {
+   throw new Error(`unreachable variant${context ? ` in ${context}` : ''}: ${rendered}`)
+ }
+ 
++/** Native constructor sources, captured once: `toString` of the same intrinsic is stable per engine. */
++const INTRINSIC_CONSTRUCTOR_SOURCE: Record<'Array' | 'Object', string> = {
++  Array: Function.prototype.toString.call(Array),
++  Object: Function.prototype.toString.call(Object),
++}
++
++/** Per-prototype verdicts: a realm's intrinsic prototype keeps its shape for the process lifetime. */
++const INTRINSIC_CONSTRUCTOR_CACHE: Record<'Array' | 'Object', WeakMap<object, boolean>> = {
++  Array: new WeakMap(),
++  Object: new WeakMap(),
++}
++
+ /** Whether a realm-owned intrinsic prototype has a native constructor matching this engine's representation. */
+ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
++  const cache = INTRINSIC_CONSTRUCTOR_CACHE[name]
++  const cached = cache.get(prototype)
++  if (cached !== undefined) return cached
++  const verdict = computeIntrinsicConstructor(prototype, name)
++  cache.set(prototype, verdict)
++  return verdict
++}
++
++/** Read the prototype's own constructor descriptor once; the caller memoizes the verdict. */
++function computeIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
+   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'constructor')
+   const constructor: unknown = descriptor?.value
+   if (typeof constructor !== 'function') return false
+   try {
+     return constructor.name === name
+       && constructor.prototype === prototype
+-      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
++      && Function.prototype.toString.call(constructor) === INTRINSIC_CONSTRUCTOR_SOURCE[name]
+   } catch {
+     return false
+   }
+diff --git a/scripts/install-lefthook.mjs b/scripts/install-lefthook.mjs
+index 653fa2c8dd..fd39973759 100644
+--- a/scripts/install-lefthook.mjs
++++ b/scripts/install-lefthook.mjs
+@@ -623,6 +623,11 @@ function refuseScopedHooksPath(entry) {
+ async function main() {
+   if (process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true') return
+   if (typeof lefthookPackage.bin?.lefthook !== 'string') return
++  // [termux-patch] No lefthook platform binary is published for Android (the resolver
++  // asks for `lefthook-android-arm64`, which does not exist), so the shim at
++  // node_modules/.bin/lefthook fails at spawn time and fails the whole install.
++  // Git hooks are a developer convenience; skip them on Android instead.
++  if (process.platform === 'android') return
+   const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' })
+   if (probe.status !== 0) return
+   const root = stripGitLineTerminator(probe.stdout)

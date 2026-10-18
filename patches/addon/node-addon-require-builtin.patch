@@ -1,0 +1,47 @@
+diff --git a/packages/native/src/runtime_context/platform.cc b/packages/native/src/runtime_context/platform.cc
+index c743705..40aaecc 100644
+--- a/packages/native/src/runtime_context/platform.cc
++++ b/packages/native/src/runtime_context/platform.cc
+@@ -28,7 +28,7 @@ Result<CurrentContextRead> ReadCurrentV8Context(
+   return ReadDarwinArm64CurrentV8Context(isolate, symbols);
+ #elif defined(__APPLE__) && defined(__x86_64__)
+   return ReadDarwinX64CurrentV8Context(isolate, symbols);
+-#elif defined(__linux__) && defined(__GLIBC__) && defined(__aarch64__)
++#elif defined(__linux__) && (defined(__GLIBC__) || defined(__ANDROID__)) && defined(__aarch64__)
+   return ReadLinuxGlibcArm64CurrentV8Context(isolate, symbols);
+ #elif defined(__linux__) && defined(__GLIBC__) && defined(__x86_64__)
+   return ReadLinuxGlibcX64CurrentV8Context(isolate, symbols);
+diff --git a/packages/native/src/runtime_probe/platform.cc b/packages/native/src/runtime_probe/platform.cc
+index ee020e6..a9cb436 100644
+--- a/packages/native/src/runtime_probe/platform.cc
++++ b/packages/native/src/runtime_probe/platform.cc
+@@ -8,7 +8,7 @@ Result<GetterPattern> ParseBuiltinModuleRequireGetterOffset(void* getter) {
+   return ParseDarwinArm64BuiltinModuleRequireGetterOffset(getter);
+ #elif defined(__APPLE__) && defined(__x86_64__)
+   return ParseDarwinX64BuiltinModuleRequireGetterOffset(getter);
+-#elif defined(__linux__) && defined(__GLIBC__) && defined(__aarch64__)
++#elif defined(__linux__) && (defined(__GLIBC__) || defined(__ANDROID__)) && defined(__aarch64__)
+   return ParseLinuxGlibcArm64BuiltinModuleRequireGetterOffset(getter);
+ #elif defined(__linux__) && defined(__GLIBC__) && defined(__x86_64__)
+   return ParseLinuxGlibcX64BuiltinModuleRequireGetterOffset(getter);
+diff --git a/scripts/build.ts b/scripts/build.ts
+index bbf7c47..56a9f69 100644
+--- a/scripts/build.ts
++++ b/scripts/build.ts
+@@ -183,6 +183,7 @@ function linuxLibc(): 'glibc' | 'musl' | undefined {
+ 
+ function runtimeSuffix(): string {
+   if (process.platform === 'darwin') return `darwin-${process.arch}`;
++  if (process.platform === 'android') return `android-${process.arch}`;
+   if (process.platform === 'linux') {
+     const libc = linuxLibc() === 'glibc' ? 'gnu' : 'musl';
+     return `linux-${process.arch}-${libc}`;
+@@ -247,7 +248,7 @@ function compileArgs(includeDir: string): string[] {
+   if (process.platform === 'darwin') {
+     return ['-bundle', '-undefined', 'dynamic_lookup', ...args];
+   }
+-  if (process.platform === 'linux') {
++  if (process.platform === 'linux' || process.platform === 'android') {
+     return ['-shared', '-fPIC', '-pthread', ...args];
+   }
+   throw new Error(`unsupported platform for direct build: ${process.platform}`);

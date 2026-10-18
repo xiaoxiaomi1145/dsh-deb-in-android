@@ -1,0 +1,445 @@
+diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
+index a9d97fd6ac..1b0301a291 100644
+--- a/packages/fs/fs-local/src/fsio.ts
++++ b/packages/fs/fs-local/src/fsio.ts
+@@ -6,8 +6,8 @@
+  */
+ 
+ import { randomUUID } from 'node:crypto'
+-import { createReadStream, realpath as realpathCallback } from 'node:fs'
+-import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
++import { constants, createReadStream, realpath as realpathCallback } from 'node:fs'
++import { chmod, copyFile, link, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+ import type { BigIntStats, Dirent, Stats } from 'node:fs'
+ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+ import { TextDecoder, promisify } from 'node:util'
+@@ -27,6 +27,18 @@ function isEEXIST(error: unknown): boolean {
+   return error instanceof Error && 'code' in error && error.code === 'EEXIST'
+ }
+ 
++/**
++ * A hard link refused by platform policy rather than by the filesystem's state.
++ * Android's untrusted_app SELinux domain denies `link(2)` outright — every
++ * source and destination pair, including two names in the same directory —
++ * and reports it as `EACCES`. The permission bits are irrelevant there: the
++ * call is blocked by the domain's policy, so the guard has to be on the errno
++ * pair POSIX uses for "this operation is not permitted", not on a mode check.
++ */
++function isLinkPolicyDenied(error: unknown): boolean {
++  return error instanceof Error && 'code' in error && (error.code === 'EACCES' || error.code === 'EPERM')
++}
++
+ /**
+  * A path component that is expected to be a directory is a regular file (e.g.
+  * resolving `afile/child.txt` when `afile` is a file). Like `ENOENT`, the target
+@@ -93,6 +105,8 @@ export interface FsIoInternals {
+   replaceFile?: (replaced: string, replacement: string) => Promise<void>
+   /** Override the hard-link no-replace publication boundary. */
+   linkFile?: (existingPath: string, newPath: string) => Promise<void>
++  /** Override the exclusive-copy fallback used when platform policy denies `link()`. */
++  copyFileExclusive?: (existingPath: string, newPath: string) => Promise<void>
+   /** Override target inspection after guarded publication fails. */
+   inspectPublicationTarget?: (path: string) => Promise<BigIntStats>
+   /** Override staging-directory removal for commit-point failure coverage. */
+@@ -570,6 +584,50 @@ async function throwGuardedCreateFailure(
+   throw new FsError(`cannot write "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
+ }
+ 
++/**
++ * Publish a staged temp under a new name without replacing an existing entry.
++ * Hard links are the cheapest no-replace publication primitive, but some
++ * platforms deny `link(2)` outright: Android's untrusted_app SELinux domain
++ * refuses every pair, including two names in one directory, with `EACCES`.
++ * The exclusive copy fallback keeps the contract that matters — the target is
++ * never clobbered, because `COPYFILE_EXCL` reports the same `EEXIST` a losing
++ * link race would. It is not byte-for-byte equivalent to a link: the copy
++ * creates the destination before filling it, so a concurrent reader can
++ * briefly observe a partial file where a link would have been atomic. That
++ * window is preferred to failing the write, and the staged source is already
++ * synced, so the copy only ever carries complete content.
++ * @param linkFile - hard-link publication primitive.
++ * @param copyFileExclusive - exclusive-copy fallback for policy-denied links.
++ * @param tempPath - synced staging file holding the full content.
++ * @param absolutePath - destination; must not already exist.
++ * @param displayPath - caller-facing path used in failure messages.
++ * @param inspectPublicationTarget - post-failure target inspection.
++ */
++async function publishGuardedCreate(
++  linkFile: (existingPath: string, newPath: string) => Promise<void>,
++  copyFileExclusive: (existingPath: string, newPath: string) => Promise<void>,
++  tempPath: string,
++  absolutePath: string,
++  displayPath: string,
++  inspectPublicationTarget: (path: string) => Promise<BigIntStats>,
++): Promise<void> {
++  try {
++    await linkFile(tempPath, absolutePath)
++    return
++  } catch (error: unknown) {
++    // A refused link is a collision (handled below) or a real IO fault; only
++    // platform policy denial means the primitive itself is unavailable here.
++    if (!isLinkPolicyDenied(error)) {
++      await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget)
++    }
++  }
++  try {
++    await copyFileExclusive(tempPath, absolutePath)
++  } catch (error: unknown) {
++    await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget)
++  }
++}
++
+ /**
+  * Atomically replace a file through a private, synced staging file in the same directory.
+  * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
+@@ -606,6 +664,8 @@ export async function writeFileAtomic(
+   const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
+   const replaceFile = internals.replaceFile ?? replaceFileWin32
+   const linkFile = internals.linkFile ?? link
++  const copyFileExclusive = internals.copyFileExclusive
++    ?? ((source: string, target: string) => copyFile(source, target, constants.COPYFILE_EXCL))
+   const inspectPublicationTarget = internals.inspectPublicationTarget
+     ?? (path => lstat(path, { bigint: true }))
+   const removeStagingDir = internals.removeStagingDir
+@@ -631,11 +691,14 @@ export async function writeFileAtomic(
+ 
+     throwIfAborted(signal, 'write')
+     if (createIfAbsent !== undefined) {
+-      try {
+-        await linkFile(tempPath, absolutePath)
+-      } catch (error: unknown) {
+-        await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget)
+-      }
++      await publishGuardedCreate(
++        linkFile,
++        copyFileExclusive,
++        tempPath,
++        absolutePath,
++        createIfAbsent.displayPath,
++        inspectPublicationTarget,
++      )
+     } else if (platform === 'win32' && mode !== undefined) {
+       try {
+         await replaceFile(absolutePath, tempPath)
+diff --git a/packages/fs/fs-local/tests/fsio.spec.ts b/packages/fs/fs-local/tests/fsio.spec.ts
+index 40ed836309..83098489bc 100644
+--- a/packages/fs/fs-local/tests/fsio.spec.ts
++++ b/packages/fs/fs-local/tests/fsio.spec.ts
+@@ -6,7 +6,8 @@
+  */
+ 
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+-import { chmod, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile, mkdir, readdir, realpath } from 'node:fs/promises'
++import { constants } from 'node:fs'
++import { chmod, copyFile, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile, mkdir, readdir, realpath } from 'node:fs/promises'
+ import { tmpdir } from 'node:os'
+ import { isAbsolute, join, parse, relative, resolve } from 'node:path'
+ import { createServer } from 'node:net'
+@@ -822,16 +823,69 @@ describe('writeFileAtomic — temp-file safety', () => {
+   })
+ 
+   it('maps a non-collision guarded-create publication failure and cleans staging', async () => {
++    const file = join(dir, 'a.txt')
++    const faulted = Object.assign(new Error('link failed'), { code: 'EIO' })
++
++    await expect(writeFileAtomic(file, 'ours', undefined, undefined, {
++      linkFile: async () => { throw faulted },
++    }, { displayPath: file })).rejects.toMatchObject({ code: 'FS_IO_ERROR', cause: faulted })
++    await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
++    expect((await readdir(dir)).filter(name => name.includes('.tmp'))).toEqual([])
++  })
++
++  it('falls back to an exclusive copy when platform policy denies the hard link', async () => {
++    const file = join(dir, 'a.txt')
++    const denied = Object.assign(new Error('link denied'), { code: 'EACCES' })
++    let copied = false
++
++    await writeFileAtomic(file, 'ours', undefined, undefined, {
++      linkFile: async () => { throw denied },
++      copyFileExclusive: async (source, target) => {
++        copied = true
++        await copyFile(source, target, constants.COPYFILE_EXCL)
++      },
++    }, { displayPath: file })
++
++    expect(copied).toBe(true)
++    expect(await readFile(file, 'utf8')).toBe('ours')
++    expect((await readdir(dir)).filter(name => name.includes('.tmp'))).toEqual([])
++  })
++
++  it('falls back to an exclusive copy when policy reports EPERM instead of EACCES', async () => {
++    const file = join(dir, 'a.txt')
++    const denied = Object.assign(new Error('link denied'), { code: 'EPERM' })
++
++    await writeFileAtomic(file, 'ours', undefined, undefined, {
++      linkFile: async () => { throw denied },
++    }, { displayPath: file })
++
++    expect(await readFile(file, 'utf8')).toBe('ours')
++  })
++
++  it('preserves the no-replace contract when the fallback copy loses to a competitor', async () => {
+     const file = join(dir, 'a.txt')
+     const denied = Object.assign(new Error('link denied'), { code: 'EACCES' })
+ 
+     await expect(writeFileAtomic(file, 'ours', undefined, undefined, {
+       linkFile: async () => { throw denied },
+-    }, { displayPath: file })).rejects.toMatchObject({ code: 'FS_IO_ERROR', cause: denied })
++      copyFileExclusive: async () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }) },
++    }, { displayPath: file })).rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
+     await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
+     expect((await readdir(dir)).filter(name => name.includes('.tmp'))).toEqual([])
+   })
+ 
++  it('reports a fallback-copy failure through the guarded-create taxonomy', async () => {
++    const file = join(dir, 'a.txt')
++    const denied = Object.assign(new Error('link denied'), { code: 'EACCES' })
++    const copyFault = Object.assign(new Error('copy failed'), { code: 'EIO' })
++
++    await expect(writeFileAtomic(file, 'ours', undefined, undefined, {
++      linkFile: async () => { throw denied },
++      copyFileExclusive: async () => { throw copyFault },
++    }, { displayPath: file })).rejects.toMatchObject({ code: 'FS_IO_ERROR', cause: copyFault })
++    expect((await readdir(dir)).filter(name => name.includes('.tmp'))).toEqual([])
++  })
++
+   it('maps a guarded-create target-inspection failure and cleans staging', async () => {
+     const file = join(dir, 'a.txt')
+     const linkFailure = Object.assign(new Error('link failed'), { code: 'EIO' })
+diff --git a/packages/fs/tool-fs-search/src/search-core.ts b/packages/fs/tool-fs-search/src/search-core.ts
+index 794a5d43fe..14ef8b71d1 100644
+--- a/packages/fs/tool-fs-search/src/search-core.ts
++++ b/packages/fs/tool-fs-search/src/search-core.ts
+@@ -19,8 +19,8 @@
+  * @module @deepseek-ai/dsh-tool-fs-search/search-core
+  */
+ 
+-import { existsSync } from 'node:fs'
+-import { isAbsolute, join, parse, relative, sep } from 'node:path'
++import { accessSync, constants, existsSync, statSync } from 'node:fs'
++import { delimiter, isAbsolute, join, parse, relative, sep } from 'node:path'
+ import type { Context } from '@deepseek-ai/cordis'
+ import { HarnessError } from '@deepseek-ai/dsh-llm'
+ import { ItemRetainer, TextRetainer } from '@deepseek-ai/dsh-output-retention'
+@@ -157,16 +157,48 @@ function completeStdout(toolName: string, stdout: SubprocessOutputRead, rawOutpu
+ let rgPathPromise: Promise<string> | undefined
+ 
+ /**
+- * The packaged ripgrep binary path, resolved lazily once per process.
++ * Locate a usable `rg` on the ambient `PATH`.
++ *
++ * This is the last resolution tier: a platform whose ABI has no published
++ * `@vscode/ripgrep-<platform>-<arch>` package (notably Android/Termux, where
++ * `process.platform` is `'android'` while the runtime is Linux/arm64) can
++ * still run the packaged search tools when a system ripgrep is installed.
++ * Candidates are probed with `accessSync(X_OK)` so a non-executable or
++ * directory entry is skipped rather than handed to `spawn`.
++ *
++ * @returns the first executable `rg` on `PATH`, or `undefined` when none exists.
++ */
++function findSystemRg(): string | undefined {
++  const directories = (process.env.PATH ?? '').split(delimiter).filter((entry) => entry !== '')
++  const names = process.platform === 'win32' ? ['rg.exe', 'rg'] : ['rg']
++  for (const directory of directories) {
++    for (const name of names) {
++      const candidate = join(directory, name)
++      try {
++        if (!statSync(candidate).isFile()) continue
++        accessSync(candidate, constants.X_OK)
++        return candidate
++      } catch {
++        // Not an executable file here; keep scanning the remaining directories.
++      }
++    }
++  }
++  return undefined
++}
++
++/**
++ * The ripgrep binary path, resolved lazily once per process.
+  *
+  * A single-file runtime uses the executable's `-rg` sidecar because a native
+  * helper cannot be spawned from pkg's virtual filesystem. Node-mode builds
+- * fall back to the platform package selected by `@vscode/ripgrep`. Resolving
+- * at the call boundary keeps a missing or corrupt binary at the first search
+- * call as `SEARCH_FAILED`, rather than failing the Loader composition.
++ * fall back to the platform package selected by `@vscode/ripgrep`, and then to
++ * a system `rg` on `PATH` when that platform package does not exist for the
++ * running platform. Resolving at the call boundary keeps a missing or corrupt
++ * binary at the first search call as `SEARCH_FAILED`, rather than failing the
++ * Loader composition.
+  *
+- * @returns the packaged binary's absolute path; the memoized promise rejects
+- *   when the platform package cannot be resolved.
++ * @returns the binary's absolute path; the memoized promise rejects when
++ *   neither the packaged platform package nor a system `rg` can be resolved.
+  */
+ export function resolveRgPath(): Promise<string> {
+   rgPathPromise ??= Promise.resolve().then(async () => {
+@@ -175,10 +207,22 @@ export function resolveRgPath(): Promise<string> {
+       ? join(executable.dir, `${executable.name}-rg.exe`)
+       : `${process.execPath}-rg`
+     if ('pkg' in process && existsSync(executableSidecar)) return executableSidecar
+-    const dependency = (await import('@vscode/ripgrep')).rgPath
+-    return process.versions.electron === undefined
+-      ? dependency
+-      : dependency.replace(/\.asar(?=[\\/])/u, '.asar.unpacked')
++    let packagedFailure: unknown
++    try {
++      const dependency = (await import('@vscode/ripgrep')).rgPath
++      return process.versions.electron === undefined
++        ? dependency
++        : dependency.replace(/\.asar(?=[\\/])/u, '.asar.unpacked')
++    } catch (error: unknown) {
++      packagedFailure = error
++    }
++    const system = findSystemRg()
++    if (system !== undefined) return system
++    throw new SearchError(
++      `ripgrep is unavailable: the @vscode/ripgrep platform package for ${process.platform}-${process.arch} could not be loaded and no \`rg\` executable was found on PATH`,
++      'SEARCH_FAILED',
++      { cause: packagedFailure },
++    )
+   })
+   return rgPathPromise
+ }
+diff --git a/packages/fs/tool-fs-search/tests/rg-path.spec.ts b/packages/fs/tool-fs-search/tests/rg-path.spec.ts
+index 7369ef521c..96f08ee8d1 100644
+--- a/packages/fs/tool-fs-search/tests/rg-path.spec.ts
++++ b/packages/fs/tool-fs-search/tests/rg-path.spec.ts
+@@ -1,27 +1,47 @@
+ /**
+- * Failure-path tests for the lazy packaged-ripgrep resolution. The success
+- * path (the real `@vscode/ripgrep` module) is exercised throughout
+- * tools.spec.ts; here the module is mocked to throw at evaluation, proving a
+- * missing or corrupt platform package (`--omit=optional`, partial install)
+- * surfaces as a per-call `SEARCH_FAILED` — not a composition-load failure.
++ * Failure and fallback paths for the lazy ripgrep resolution. The success path
++ * (the real `@vscode/ripgrep` module) is exercised throughout tools.spec.ts;
++ * here the module is mocked to throw at evaluation, proving a missing or
++ * corrupt platform package (`--omit=optional`, a partial install, or a
++ * platform/arch pair that publishes no package at all — notably
++ * `android-arm64` under Termux) never fails the composition load.
++ *
++ * Two outcomes are pinned: with no system `rg` on PATH the first search call
++ * fails as `SEARCH_FAILED` and the memoized rejection is stable, and with a
++ * system `rg` on PATH the resolution falls back to it. Each case imports a
++ * fresh module instance because the resolution memoizes per process.
+  */
+ 
+-import { describe, expect, it, vi } from 'vitest'
++import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ import { Context } from '@deepseek-ai/cordis'
+ import { ToolCallId } from '@deepseek-ai/dsh-llm'
+ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+-import { resolveRgPath, runRipgrep } from '@deepseek-ai/dsh-tool-fs-search'
++import { runRipgrep } from '@deepseek-ai/dsh-tool-fs-search'
+ 
+ // Any access to the mocked module's surface throws — the shape a missing
+ // platform package produces at module evaluation.
+ vi.mock('@vscode/ripgrep', () => new Proxy({}, {
+   get() {
+-    throw new Error('platform package @vscode/ripgrep-win32-x64 is not installed')
++    throw new Error('platform package @vscode/ripgrep-android-arm64 is not installed')
+   },
+ }))
+ 
++const originalPath = process.env.PATH
++
++beforeEach(() => {
++  vi.resetModules()
++})
++
++afterEach(() => {
++  process.env.PATH = originalPath
++})
++
+ describe('lazy packaged-ripgrep resolution', () => {
+-  it('fails the first search call with SEARCH_FAILED instead of failing module load', async () => {
++  it('fails the first search call with SEARCH_FAILED when no system rg exists', async () => {
++    process.env.PATH = ''
+     // The resolution rejects before any spawn, so no subprocess service is needed.
+     const controller = new AbortController()
+     const exec = { signal: controller.signal, name: 'glob', callId: ToolCallId('missing-platform-package') } as unknown as ToolExecution
+@@ -30,8 +50,28 @@ describe('lazy packaged-ripgrep resolution', () => {
+       .rejects.toMatchObject({ name: 'SearchError', code: 'SEARCH_FAILED' })
+   })
+ 
+-  it('keeps failing every subsequent call (the resolution is memoized)', async () => {
++  it('keeps failing every subsequent call when no system rg exists (the resolution is memoized)', async () => {
++    process.env.PATH = ''
++    const { resolveRgPath } = await import('@deepseek-ai/dsh-tool-fs-search')
++
+     await expect(resolveRgPath()).rejects.toThrow(/platform package/)
+     await expect(resolveRgPath()).rejects.toThrow(/platform package/)
+   })
++
++  it('falls back to a system rg on PATH when the platform package is missing', async () => {
++    const bin = await mkdtemp(join(tmpdir(), 'dsh-rg-path-'))
++    try {
++      const executable = join(bin, process.platform === 'win32' ? 'rg.exe' : 'rg')
++      await writeFile(executable, '#!/bin/sh\nexit 0\n')
++      await chmod(executable, 0o755)
++      process.env.PATH = bin
++      const { resolveRgPath } = await import('@deepseek-ai/dsh-tool-fs-search')
++
++      await expect(resolveRgPath()).resolves.toBe(executable)
++      // The fallback is memoized like every other tier.
++      expect(resolveRgPath()).toBe(resolveRgPath())
++    } finally {
++      await rm(bin, { recursive: true, force: true })
++    }
++  })
+ })
+diff --git a/packages/fs/tool-fs-search/tests/tools.spec.ts b/packages/fs/tool-fs-search/tests/tools.spec.ts
+index c261d139a6..dcc2adf909 100644
+--- a/packages/fs/tool-fs-search/tests/tools.spec.ts
++++ b/packages/fs/tool-fs-search/tests/tools.spec.ts
+@@ -22,7 +22,6 @@ import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH, type ToolExecution, type Too
+ import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
+ import type { SubprocessCollectedOutputs, SubprocessHandle, SubprocessOutcome, SubprocessOutputRead, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
+-import { rgPath } from '@vscode/ripgrep'
+ import { SpillLocator, SpillStore } from '@deepseek-ai/dsh-spill'
+ import type { SaveTextSpill, SpillRef } from '@deepseek-ai/dsh-spill'
+ import * as ToolFsSearch from '@deepseek-ai/dsh-tool-fs-search'
+@@ -414,7 +413,7 @@ describe('workdir derivation and signal forwarding', () => {
+     const spec = subprocess.spawns[0]
+     // --no-config keeps a host RIPGREP_CONFIG_PATH from injecting a
+     // preprocessor into this unconfined spawn.
+-    expect(spec?.argv).toEqual([rgPath, '--no-config', '--json', '--regexp=needle'])
++    expect(spec?.argv).toEqual([await resolveRgPath(), '--no-config', '--json', '--regexp=needle'])
+     expect(spec?.stdio.stdin).toBe('ignore')
+     // stdout gets the tool's parse budget; stderr is a diagnostic excerpt;
+     // both are the seam's diagnostic-tail shape (no spill files requested).
+@@ -531,13 +530,14 @@ describe('workdir derivation and signal forwarding', () => {
+     expect(text(result)).toContain('aborted before completion')
+   })
+ 
+-  it('resolves the packaged ripgrep path lazily, once per process', async () => {
++  it('resolves the ripgrep path lazily, once per process', async () => {
+     // The module must not touch @vscode/ripgrep at load (a missing platform
+     // package would otherwise fail the whole composition), and repeated
+-    // resolution reuses the first result. The resolution-failure path is
+-    // pinned separately in rg-path.spec.ts.
++    // resolution reuses the first result. Which tier wins — the packaged
++    // platform package or a system `rg` — is pinned separately in
++    // rg-sidecar.spec.ts and rg-path.spec.ts.
+     await setup()
+-    expect(await resolveRgPath()).toBe(rgPath)
++    expect(typeof await resolveRgPath()).toBe('string')
+     expect(resolveRgPath()).toBe(resolveRgPath())
+   })
+ 
+@@ -757,7 +757,7 @@ describe('glob results', () => {
+     subprocess.handler = () => runResult('sub/a.ts\n')
+     const result = await call(ctx, 'glob', { pattern: '*.ts', path: 'sub' })
+     expect(result.isError).toBe(false)
+-    expect(subprocess.spawns[0]?.argv).toEqual([rgPath, '--no-config', '--files', '--glob=*.ts', '--sort=modified', '--no-ignore', '--hidden',
++    expect(subprocess.spawns[0]?.argv).toEqual([await resolveRgPath(), '--no-config', '--files', '--glob=*.ts', '--sort=modified', '--no-ignore', '--hidden',
+       '--glob=!**/.git', '--glob=!**/.git/**',
+       '--glob=!**/.svn', '--glob=!**/.svn/**',
+       '--glob=!**/.hg', '--glob=!**/.hg/**',

@@ -1,0 +1,85 @@
+diff --git a/native/system/packages/entry/src/flock.ts b/native/system/packages/entry/src/flock.ts
+index fcbf8a9e3c..d2c69d10e4 100644
+--- a/native/system/packages/entry/src/flock.ts
++++ b/native/system/packages/entry/src/flock.ts
+@@ -12,7 +12,7 @@ let binding: FlockBinding | undefined
+ function loadBinding(): FlockBinding {
+   if (binding) return binding
+   const { platform, arch } = process
+-  if (platform !== 'linux' && platform !== 'darwin') {
++  if (platform !== 'linux' && platform !== 'darwin' && platform !== 'android') {
+     throw Object.assign(new Error(`flock is not supported on ${platform}-${arch}`), {
+       code: 'ERR_FLOCK_UNSUPPORTED_PLATFORM',
+       syscall: 'flock',
+@@ -20,13 +20,13 @@ function loadBinding(): FlockBinding {
+   }
+ 
+   let filename = 'system.node'
+-  if (platform === 'linux') {
++  if (platform === 'linux' || platform === 'android') {
+     // Node's report types omit the libc field supplied by Linux reports.
+     const report = process.report.getReport() as { header: { glibcVersionRuntime?: string } }
+     filename = join(report.header.glibcVersionRuntime ? 'glibc' : 'musl', filename)
+   }
+   const require = createRequire(import.meta.url)
+-  const manifest = require.resolve(`@deepseek-ai/node-addon-system-${platform}-${arch}/package.json`)
++  const manifest = require.resolve(`@deepseek-ai/node-addon-system-${platform === 'android' ? 'linux' : platform}-${arch}/package.json`)
+   binding = require(join(dirname(manifest), 'bin', filename)) as FlockBinding
+   return binding
+ }
+diff --git a/native/system/packages/entry/src/index.ts b/native/system/packages/entry/src/index.ts
+index 5a6c5f955f..99562f3b48 100644
+--- a/native/system/packages/entry/src/index.ts
++++ b/native/system/packages/entry/src/index.ts
+@@ -69,7 +69,7 @@ export interface LauncherGrants {
+ export function launcherPath(
+   resolvePackageJson: (specifier: string) => string = createRequire(import.meta.url).resolve,
+ ): string {
+-  const platformPackage = `@deepseek-ai/node-addon-system-${process.platform}-${process.arch}`
++  const platformPackage = `@deepseek-ai/node-addon-system-${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`
+   try {
+     return join(dirname(resolvePackageJson(`${platformPackage}/package.json`)), 'bin', LAUNCHER_BIN)
+   } catch {
+diff --git a/native/system/packages/linux-arm64/prebuilds.json b/native/system/packages/linux-arm64/prebuilds.json
+index aef7abf975..f4b44187bc 100644
+--- a/native/system/packages/linux-arm64/prebuilds.json
++++ b/native/system/packages/linux-arm64/prebuilds.json
+@@ -1,11 +1,6 @@
+ {
+   "platform": "linux-arm64",
+   "binaries": [
+-    {
+-      "tool": "landlock-run",
+-      "kind": "static-musl",
+-      "path": "bin/landlock-run"
+-    },
+     {
+       "tool": "flock",
+       "kind": "node-api",
+@@ -21,4 +16,4 @@
+       "path": "bin/musl/system.node"
+     }
+   ]
+-}
++}
+\ No newline at end of file
+diff --git a/native/system/scripts/build.ts b/native/system/scripts/build.ts
+index ca995d9c03..5b6b13cdc5 100644
+--- a/native/system/scripts/build.ts
++++ b/native/system/scripts/build.ts
+@@ -24,12 +24,12 @@ interface Binary {
+   libc?: string
+ }
+ 
+-if (process.platform !== 'linux' && process.platform !== 'darwin') {
++if (process.platform !== 'linux' && process.platform !== 'darwin' && process.platform !== 'android') {
+   if (hostAddonOnly) process.exit(0)
+   throw new Error('build: system binaries are built on Linux or macOS; no native target for this host')
+ }
+-const host = `${process.platform}-${process.arch}`
+-const libc = process.platform === 'linux'
++const host = `${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`
++const libc = (process.platform === 'linux' || process.platform === 'android')
+   ? ((process.report.getReport() as { header: { glibcVersionRuntime?: string } }).header.glibcVersionRuntime ? 'glibc' : 'musl')
+   : undefined
+ const headers = resolve(dirname(process.execPath), '../include/node')

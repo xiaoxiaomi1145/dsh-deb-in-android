@@ -1,0 +1,6 @@
+dist/
+logs/
+node_modules/
+*.deb
+*.log
+.ci/

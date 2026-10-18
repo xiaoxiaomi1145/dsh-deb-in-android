@@ -1,0 +1,115 @@
+name: dsh-deb
+on:
+  schedule:
+    - cron: '23 4,16 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: rebuild even if the release already exists
+        required: false
+        default: 'no'
+permissions:
+  contents: write
+jobs:
+  s1:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.a.outputs.tag }}
+      ver: ${{ steps.a.outputs.ver }}
+      go: ${{ steps.a.outputs.go }}
+    steps:
+      - id: a
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          up=https://api.github.com/repos/deepseek-ai/deepseek-harness/releases/latest
+          tag=$(curl -fsSL "$up" | jq -r '.tag_name // empty' || true)
+          if [ -z "${tag:-}" ]; then
+              tag=$(git ls-remote --tags --refs https://github.com/deepseek-ai/deepseek-harness.git | awk -F/ '{print $NF}' | sort -V | tail -1)
+          fi
+          ver=${tag#dsh-v}
+          ver=${ver#v}
+          have=$(gh release list -R "$GITHUB_REPOSITORY" -L 100 --json tagName -q '.[].tagName' | grep -Fx "$tag" || true)
+          go=1
+          if [ -n "$have" ]; then
+            if [ "${{ github.event.inputs.force }}" != "yes" ]; then go=0; fi
+          fi
+          printf 'tag=%s\nver=%s\ngo=%s\n' "$tag" "$ver" "$go" >> "$GITHUB_OUTPUT"
+          echo "$tag $ver $go"
+  s2:
+    needs: s1
+    if: needs.s1.outputs.go == '1' && vars.BUILD_MODE != 'docker'
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","termux"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: pull
+        run: |
+          set -eu
+          rm -rf "$HOME/dsh-ci-src"
+          git clone --depth 1 -b "${{ needs.s1.outputs.tag }}" https://github.com/deepseek-ai/deepseek-harness.git "$HOME/dsh-ci-src"
+          bash scripts/apply-all-patches.sh --repo "$HOME/dsh-ci-src" --force
+      - name: deps
+        run: |
+          cd "$HOME/dsh-ci-src"
+          pnpm install --frozen-lockfile
+      - name: addon
+        run: |
+          set -eu
+          DSH_REPO="$HOME/dsh-ci-src" bash scripts/build-addon.sh
+      - name: sharp
+        run: |
+          set -eu
+          DSH_REPO="$HOME/dsh-ci-src" bash scripts/sharp-setup.sh build
+      - name: compile
+        env:
+          DSH_GATE_CONCURRENCY: '1'
+          NODE_OPTIONS: --max-old-space-size=2048
+        run: |
+          cd "$HOME/dsh-ci-src"
+          pnpm run build:artifacts --profile official
+      - name: pack
+        run: |
+          set -eu
+          REPO="$HOME/dsh-ci-src" bash scripts/build-all.sh --skip-install --only=deb --version=${{ needs.s1.outputs.ver }}
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+  s3:
+    needs: s1
+    if: needs.s1.outputs.go == '1' && vars.BUILD_MODE == 'docker'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+      - name: build
+        run: bash scripts/build-in-docker.sh "${{ needs.s1.outputs.tag }}" "${{ needs.s1.outputs.ver }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+  s4:
+    needs: [s1, s2, s3]
+    if: always() && needs.s1.outputs.go == '1' && (needs.s2.result == 'success' || needs.s3.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+          path: dist
+      - name: ship
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.s1.outputs.tag }}
+          VER: ${{ needs.s1.outputs.ver }}
+        run: |
+          set -eu
+          f=$(ls dist/*.deb | head -1)
+          gh release create "$TAG" "$f" -t "$TAG" -n "dsh $VER termux aarch64"

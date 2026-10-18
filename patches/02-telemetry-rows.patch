@@ -1,0 +1,268 @@
+diff --git a/apps/cli/tests/telemetry-switch.spec.ts b/apps/cli/tests/telemetry-switch.spec.ts
+index 0397ffaf35..43c89c5e18 100644
+--- a/apps/cli/tests/telemetry-switch.spec.ts
++++ b/apps/cli/tests/telemetry-switch.spec.ts
+@@ -1,22 +1,26 @@
+ import { describe, expect, it } from 'vitest'
+-import { resolveTelemetryPatch } from '@deepseek-ai/dsh-app-boot'
++import { resolveTelemetryPatches } from '@deepseek-ai/dsh-app-boot'
+ 
+-describe('resolveTelemetryPatch', () => {
++const ROWS = new Set(['otel', 'session-telemetry-otel', 'desktop-product-telemetry', 'subprocess'])
++
++describe('resolveTelemetryPatches', () => {
+   it('preserves the configured telemetry mode when the hard-disable switch is unset or empty', () => {
+-    expect(resolveTelemetryPatch(undefined, true)).toBeUndefined()
+-    expect(resolveTelemetryPatch('', true)).toBeUndefined()
++    expect(resolveTelemetryPatches(undefined, ROWS)).toEqual([])
++    expect(resolveTelemetryPatches('', ROWS)).toEqual([])
+   })
+ 
+-  it('disables on ANY non-empty value, including falsy-looking ones', () => {
++  it('disables every telemetry row on ANY non-empty value, including falsy-looking ones', () => {
+     for (const value of ['1', '0', 'false', 'no']) {
+-      expect(resolveTelemetryPatch(value, true)).toEqual({ id: 'session-telemetry-otel', disabled: true })
++      expect(resolveTelemetryPatches(value, ROWS)).toEqual([
++        { id: 'session-telemetry-otel', disabled: true },
++        { id: 'otel', disabled: true },
++        { id: 'desktop-product-telemetry', disabled: true },
++      ])
+     }
+   })
+ 
+-  it('is trivially satisfied by a composition without the telemetry row', () => {
+-    // A custom profile need not mount telemetry: nothing exports, so the
+-    // privacy switch has nothing to disable and generates no patch.
+-    expect(resolveTelemetryPatch('1', false)).toBeUndefined()
+-    expect(resolveTelemetryPatch(undefined, false)).toBeUndefined()
++  it('only patches rows the composition carries', () => {
++    expect(resolveTelemetryPatches('1', new Set(['otel']))).toEqual([{ id: 'otel', disabled: true }])
++    expect(resolveTelemetryPatches('1', new Set(['subprocess']))).toEqual([])
+   })
+ })
+diff --git a/packages/boot/app-boot/src/index.ts b/packages/boot/app-boot/src/index.ts
+index fded02c9c8..fddbd4d1a7 100644
+--- a/packages/boot/app-boot/src/index.ts
++++ b/packages/boot/app-boot/src/index.ts
+@@ -7,7 +7,8 @@
+  */
+ 
+ import { pathToFileURL } from 'node:url'
+-import { readFileSync } from 'node:fs'
++import { existsSync, readFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
+ import { inspect, parseEnv } from 'node:util'
+ import { basename, dirname, isAbsolute, resolve } from 'node:path'
+ import * as yaml from 'js-yaml'
+@@ -17,7 +18,7 @@ import Include, { applyEntryPatches, entryListSchema, type PatchOptions } from '
+ import Group from '@deepseek-ai/cordis-plugin-group'
+ import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+ import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
+-export { readBundlePatches, readProfilePatches, resolveTelemetryPatch, type ProfileContext, type ProfilePnpmInvocation } from './profile-context.ts'
++export { readBundlePatches, readProfilePatches, resolveTelemetryPatches, type ProfileContext, type ProfilePnpmInvocation } from './profile-context.ts'
+ export { sanitizeProfile } from './profile-sanitize.ts'
+ export { getDshRuntimeVersion, evaluatePluginCompatibility, pluginCompatibilityWarning, type PluginCompatibility } from './plugin-compatibility.ts'
+ export {
+@@ -224,6 +225,27 @@ function readEnvLayer(
+   return { path, values }
+ }
+ 
++/**
++ * Guarantee `TMPDIR` names a directory that exists, for every child process this run spawns.
++ *
++ * Some children read `TMPDIR` themselves instead of asking the platform: Chromium builds its
++ * process-singleton socket directory there and aborts before it opens a DevTools endpoint when
++ * the name does not resolve, which is what a Termux host does — it has no `/tmp` and exports no
++ * `TMPDIR`. `tmpdir()` already answers with that platform's real temporary directory, so this
++ * only materializes what the runtime already believes.
++ * @returns the value it set, or `undefined` when an existing `TMPDIR` was left alone.
++ */
++export function ensureUsableTempDir(): string | undefined {
++  // An explicit TMPDIR — inherited, or supplied by either `.env` layer — is the user's decision.
++  if (process.env.TMPDIR !== undefined) return undefined
++  const resolved = tmpdir()
++  // Never invent a path: a directory that does not exist stays unset rather than sending every
++  // child to a name that does not resolve either.
++  if (!existsSync(resolved)) return undefined
++  process.env.TMPDIR = resolved
++  return resolved
++}
++
+ /**
+  * Load the product CLI's inherited > invoking-directory `.env` > Harness-home
+  * `.env` snapshot. The Harness home resolves before either file; both files
+@@ -251,6 +273,10 @@ export function loadLayeredEnv(
+       if (process.env[name] === undefined) process.env[name] = value
+     }
+   }
++  // After both layers, so a `TMPDIR` either file sets is the one that stands.
++  const tempDir = ensureUsableTempDir()
++  // Record it as inherited: it is a fact about this process, not a value either file supplied.
++  if (tempDir !== undefined) inherited.TMPDIR = tempDir
+   return createLaunchEnvironmentSnapshot([
+     { source: 'process', values: inherited },
+     ...project === undefined ? [] : [{ source: 'project-env' as const, path: project.path, values: project.values }],
+diff --git a/packages/boot/app-boot/src/profile-context.ts b/packages/boot/app-boot/src/profile-context.ts
+index e2ebfad5ce..5f737d8c13 100644
+--- a/packages/boot/app-boot/src/profile-context.ts
++++ b/packages/boot/app-boot/src/profile-context.ts
+@@ -36,22 +36,24 @@ declare module '@deepseek-ai/cordis' {
+   }
+ }
+ 
+-const TELEMETRY_ROW_ID = 'session-telemetry-otel'
++const TELEMETRY_ROW_IDS = ['session-telemetry-otel', 'otel', 'desktop-product-telemetry'] as const
+ 
+ /**
+- * Resolve the telemetry opt-out switch into its boot patch. ANY non-empty
++ * Resolve the telemetry opt-out switch into its boot patches. ANY non-empty
+  * value (including `'0'`/`'false'`) disables: a privacy switch prefers
+- * off-by-mistake over on-by-mistake. A composition without the telemetry row
+- * exports nothing, so the switch is then trivially satisfied and no patch is
+- * generated — custom profiles need not mount telemetry to run with the
+- * switch set.
++ * off-by-mistake over on-by-mistake. Every telemetry row a composition carries
++ * is disabled, including the shared `otel` transport: its OpenTelemetry SDK is
++ * the switch's dominant cost (about 150 modules at boot), so a custom consumer
++ * that injects `otel` must not run with the switch set. A composition without
++ * these rows exports nothing, so the switch is then trivially satisfied and no
++ * patch is generated.
+  * @param disabledEnv - the raw `DSH_TELEMETRY_DISABLED` value (`undefined` when unset).
+- * @param hasRow - whether the composition carries the telemetry row.
+- * @returns the disable patch, or `undefined` when no hard-disable patch is required.
++ * @param rowIds - ids present in the composed entry list.
++ * @returns the disable patches, empty when the switch is unset or empty.
+  */
+-export function resolveTelemetryPatch(disabledEnv: string | undefined, hasRow: boolean): PatchOptions | undefined {
+-  if ((disabledEnv ?? '') === '' || !hasRow) return undefined
+-  return { id: TELEMETRY_ROW_ID, disabled: true }
++export function resolveTelemetryPatches(disabledEnv: string | undefined, rowIds: ReadonlySet<string>): PatchOptions[] {
++  if ((disabledEnv ?? '') === '') return []
++  return TELEMETRY_ROW_IDS.filter(id => rowIds.has(id)).map(id => ({ id, disabled: true }))
+ }
+ 
+ /** Read the selected bundles' patches, which apply before the profile patch file.
+@@ -78,8 +80,7 @@ export function readProfilePatches(binName: string, context: ProfileContext, ini
+     ...(loadOptionalPatches(binName, join(context.home, PROFILE_PATCH_FILENAME)) ?? []),
+     ...context.overlays,
+   ])
+-  const telemetryPatch = resolveTelemetryPatch(context.telemetryDisabledEnv,
+-    composeEntries([patches]).some(row => row.id === TELEMETRY_ROW_ID))
+-  if (telemetryPatch !== undefined) patches.push(telemetryPatch)
++  const rows = composeEntries([patches])
++  patches.push(...resolveTelemetryPatches(context.telemetryDisabledEnv, new Set(rows.flatMap(row => row.id === undefined ? [] : [row.id]))))
+   return patches
+ }
+diff --git a/packages/boot/app-boot/tests/app-boot.spec.ts b/packages/boot/app-boot/tests/app-boot.spec.ts
+index 5e83da0b17..e075665ea3 100644
+--- a/packages/boot/app-boot/tests/app-boot.spec.ts
++++ b/packages/boot/app-boot/tests/app-boot.spec.ts
+@@ -7,7 +7,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
+ import { Context } from '@deepseek-ai/cordis'
+ import type {} from '@deepseek-ai/dsh-system-prompt'
+ import {
+-  auditStartupEntries, boot, StartupError,
++  auditStartupEntries, boot, ensureUsableTempDir, StartupError,
+   FAIL_LOUD_RELEASE_TIMEOUT_MS,
+   installFailLoud, loadEnv, loadLayeredEnv, loadOverlayPatches, resolveConfigPath, type FailLoudEvent, type FailLoudProcess,
+ } from '../src/index.ts'
+@@ -357,6 +357,99 @@ describe('loadLayeredEnv', () => {
+       vi.unstubAllEnvs()
+     }
+   })
++
++  it('materializes a TMPDIR the platform answers with when the launch environment has none', () => {
++    const home = tmp()
++    const project = tmp()
++    clear()
++    vi.stubEnv('DSH_HOME', home)
++    Reflect.deleteProperty(process.env, 'TMPDIR')
++    try {
++      const snapshot = loadLayeredEnv(NAME, project, vi.fn())
++      expect(process.env.TMPDIR).toBe(tmpdir())
++      // Inherited, not file-supplied: neither `.env` mentions it.
++      expect(snapshot.get('TMPDIR')).toEqual({ value: tmpdir(), source: 'process' })
++    } finally {
++      clear()
++      Reflect.deleteProperty(process.env, 'TMPDIR')
++      vi.unstubAllEnvs()
++    }
++  })
++
++  it('leaves an inherited TMPDIR alone', () => {
++    const home = tmp()
++    const project = tmp()
++    clear()
++    vi.stubEnv('DSH_HOME', home)
++    vi.stubEnv('TMPDIR', '/custom/tmp')
++    try {
++      loadLayeredEnv(NAME, project, vi.fn())
++      expect(process.env.TMPDIR).toBe('/custom/tmp')
++    } finally {
++      clear()
++      vi.unstubAllEnvs()
++    }
++  })
++
++  it('lets either .env layer outrank the platform default', () => {
++    const home = tmp()
++    const project = tmp()
++    writeFileSync(join(project, '.env'), 'TMPDIR=/from-project\n')
++    clear()
++    vi.stubEnv('DSH_HOME', home)
++    Reflect.deleteProperty(process.env, 'TMPDIR')
++    try {
++      const snapshot = loadLayeredEnv(NAME, project, vi.fn())
++      expect(process.env.TMPDIR).toBe('/from-project')
++      expect(snapshot.get('TMPDIR')).toEqual({ value: '/from-project', source: 'project-env', path: join(project, '.env') })
++    } finally {
++      clear()
++      Reflect.deleteProperty(process.env, 'TMPDIR')
++      vi.unstubAllEnvs()
++    }
++  })
++})
++
++describe('ensureUsableTempDir', () => {
++  it('sets TMPDIR to the platform temporary directory when it is unset', () => {
++    Reflect.deleteProperty(process.env, 'TMPDIR')
++    try {
++      expect(ensureUsableTempDir()).toBe(tmpdir())
++      expect(process.env.TMPDIR).toBe(tmpdir())
++    } finally {
++      Reflect.deleteProperty(process.env, 'TMPDIR')
++    }
++  })
++
++  it('reports no change when TMPDIR is already set', () => {
++    process.env.TMPDIR = '/already/set'
++    try {
++      expect(ensureUsableTempDir()).toBeUndefined()
++      expect(process.env.TMPDIR).toBe('/already/set')
++    } finally {
++      Reflect.deleteProperty(process.env, 'TMPDIR')
++    }
++  })
++
++  it('leaves TMPDIR unset when the platform directory does not exist', async () => {
++    Reflect.deleteProperty(process.env, 'TMPDIR')
++    // A fresh module instance, so the mocked `tmpdir` is the one it imported.
++    vi.resetModules()
++    vi.doMock('node:os', async importOriginal => ({
++      ...(await importOriginal<typeof import('node:os')>()),
++      tmpdir: () => join(tmp(), 'does-not-exist'),
++    }))
++    try {
++      const fresh = await import('../src/index.ts')
++      // The guard is about not inventing a path: a directory that is not there stays unset.
++      expect(fresh.ensureUsableTempDir()).toBeUndefined()
++      expect(process.env.TMPDIR).toBeUndefined()
++    } finally {
++      vi.doUnmock('node:os')
++      vi.resetModules()
++      Reflect.deleteProperty(process.env, 'TMPDIR')
++    }
++  })
+ })
+ 
+ describe('installFailLoud', () => {

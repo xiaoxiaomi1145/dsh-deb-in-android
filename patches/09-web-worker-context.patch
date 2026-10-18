@@ -1,0 +1,13 @@
+diff --git a/apps/web/product-isolation.ts b/apps/web/product-isolation.ts
+index c716329078..5191b7480e 100644
+--- a/apps/web/product-isolation.ts
++++ b/apps/web/product-isolation.ts
+@@ -58,7 +58,7 @@ export function productWebBundleIsolation(repository: string, webRoot: string):
+             name: 'dsh-worker-build-inputs',
+             generateBundle: {
+               order: 'post',
+-              handler(_options, bundle) { inputs.workerBundle(bundle, this.getWatchFiles()) },
++              handler(_options, bundle) { inputs.workerBundle(bundle, typeof this.getWatchFiles === 'function' ? this.getWatchFiles() : []) },
+             },
+           }],
+         },

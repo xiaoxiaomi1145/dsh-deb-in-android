@@ -1,0 +1,95 @@
+diff --git a/packages/session/session-persistence-jsonl/src/generation.ts b/packages/session/session-persistence-jsonl/src/generation.ts
+index ff01e9a038..95a358bb8e 100644
+--- a/packages/session/session-persistence-jsonl/src/generation.ts
++++ b/packages/session/session-persistence-jsonl/src/generation.ts
+@@ -11,6 +11,7 @@ import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-forma
+ import { createHash, randomBytes } from 'node:crypto'
+ import {
+   link as fsLink,
++  rename as fsRename,
+   lstat as fsLstat,
+   open as fsOpen,
+   readFile as fsReadFile,
+@@ -180,6 +181,7 @@ interface GenerationFileSystem {
+   stat(path: string): Promise<JsonlPhysicalIdentity>
+   lstat(path: string): Promise<{ isFile(): boolean; isSymbolicLink(): boolean }>
+   link(existingPath: string, newPath: string): Promise<void>
++  rename(existingPath: string, newPath: string): Promise<void>
+   rm(path: string): Promise<void>
+ }
+ 
+@@ -220,6 +222,7 @@ const defaultFileSystem: GenerationFileSystem = {
+   stat: path => fsStat(path, { bigint: true }),
+   lstat: path => fsLstat(path),
+   link: fsLink,
++  rename: fsRename,
+   rm: path => fsRm(path, { force: true }),
+ }
+ 
+@@ -831,7 +834,7 @@ async function publishCurrentExclusive(
+     }
+   }
+   try {
+-    await internals.fs.link(staged, currentPath)
++    await internals.fs.rename(staged, currentPath)
+   } catch (error) {
+     /* v8 ignore else -- a non-collision filesystem error propagates unchanged. */
+     if (isEEXIST(error)) return false
+diff --git a/packages/session/session-persistence-jsonl/src/index.ts b/packages/session/session-persistence-jsonl/src/index.ts
+index 3c3c13589f..f2eaad1621 100644
+--- a/packages/session/session-persistence-jsonl/src/index.ts
++++ b/packages/session/session-persistence-jsonl/src/index.ts
+@@ -14,7 +14,7 @@ import {
+   sessionFormatCatalog,
+ } from '@deepseek-ai/dsh-session-format-catalog'
+ import { readdirSync, type Dirent } from 'node:fs'
+-import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
++import { mkdir, open, readdir, realpath, rename, rm, stat, truncate } from 'node:fs/promises'
+ import { dirname, join, resolve } from 'node:path'
+ import { performance } from 'node:perf_hooks'
+ import { scheduler } from 'node:timers/promises'
+@@ -1294,30 +1294,31 @@ class JsonlSessionPersistence extends SessionPersistence {
+     await this.syncDirPosix(project)
+     await this.rejectExistingLog(finalPath, id)
+     const tmp = await this.writeSyncedTempFile(finalPath, content)
+-    // Publish via link()+unlink(), NOT rename(): link fails with EEXIST if the
+-    // final path already exists, so two processes materializing the same id
+-    // concurrently cannot clobber each other. rename() would silently overwrite.
+-    let linked = false
++    // Publish via rename(): this host's SELinux domain denies link(2) with EACCES,
++    // so the upstream link()+unlink() publish cannot run here. rename() does not
++    // fail with EEXIST, so two processes materializing the same id concurrently
++    // would not be rejected by the publish itself; rejectExistingLog() above is
++    // the collision check that remains.
++    let published = false
+     try {
+-      await link(tmp, finalPath)
+-      linked = true
++      await rename(tmp, finalPath)
++      published = true
+     } finally {
+       // Remove an unpublished temp on failure. After publication, defer cleanup
+       // until the directory entry is durable so cleanup cannot reject a live log.
+-      /* v8 ignore next -- link failure is the TOCTOU/IO race guarded above; not reachable in test */
+-      if (!linked) await rm(tmp, { force: true })
++      /* v8 ignore next -- publish failure is the TOCTOU/IO race guarded above; not reachable in test */
++      if (!published) await rm(tmp, { force: true })
+     }
+-    // link() succeeded — the log is published. fsync the directory so the new
+-    // entry survives a power loss: the new link is not crash-durable until the
+-    // parent directory's metadata is synced.
++    // The log is published. fsync the directory so the new entry survives a power
++    // loss: it is not crash-durable until the parent directory's metadata is synced.
+     await this.syncDirPosix(dir)
+     // Best-effort temp cleanup: the log is already published and durable, so a
+-    // failure to remove the redundant temp hard link must NOT reject the
++    // failure to remove the leftover temp must NOT reject the
+     // append. Swallow only the rm failure; nothing else of consequence runs here.
+     try {
+       await rm(tmp, { force: true })
+     } catch {
+-      /* v8 ignore next -- redundant temp link; publish already durable, rm failure is an unreachable IO edge */
++      /* v8 ignore next -- leftover temp; publish already durable, rm failure is an unreachable IO edge */
+     }
+   }
+   /* v8 ignore stop */

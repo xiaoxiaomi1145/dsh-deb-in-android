@@ -1,0 +1,183 @@
+diff --git a/apps/cli/src/plugin.ts b/apps/cli/src/plugin.ts
+index 86d0cc7525..50bd26287c 100644
+--- a/apps/cli/src/plugin.ts
++++ b/apps/cli/src/plugin.ts
+@@ -87,6 +87,13 @@ export async function runPlugin(profile: string, args: readonly string[], packag
+     outputBytes: 16384,
+     lockWaitMs: 120000,
+     lookupTimeoutMs: 120000,
++    // Without a silence bound, a pnpm run that stops printing while it backs off a
++    // retry — an integrity mismatch on a floating tarball dependency is the usual
++    // one — holds this command forever with no output to explain why. The run is
++    // captured and forwarded through `onOutput`, so this bound can observe silence
++    // and terminate it. Generous because a cold install of a large profile can
++    // legitimately print nothing for minutes while it resolves.
++    idleTimeoutMs: 600000,
+     onOutput: (text, stream) => { process[stream].write(text) },
+   }
+   const result = profile === 'desktop'
+@@ -99,6 +106,17 @@ export async function runPlugin(profile: string, args: readonly string[], packag
+   for (const { name, version, runtimeVersion } of result.incompatible ?? []) {
+     process.stderr.write(`dsh: to accept the risk, run: dsh plugin --profile ${profile} allow-version ${name}@${version} --dsh-version ${runtimeVersion} --accept-risk\n`)
+   }
++  // A terminated run already reported the silence and the bound through its own
++  // output, which `onOutput` forwarded above; repeating it here would double it.
++  // pnpm offers no flag that refreshes a mismatched checksum for a direct tarball
++  // dependency: --update-checksums, --no-frozen-lockfile, and --force were all
++  // measured to fail with ERR_PNPM_TARBALL_INTEGRITY, and deleting the integrity
++  // field is rejected outright by ERR_PNPM_MISSING_TARBALL_INTEGRITY. The lockfile
++  // entry is the only place the checksum can be corrected, so name the two lines
++  // that have to move together rather than suggest a command that cannot work.
++  if (result.kind === 'integrity') {
++    process.stderr.write(`dsh: pnpm refused a downloaded artifact whose checksum no longer matches the lockfile — a floating tarball or git dependency whose upstream moved. No pnpm flag corrects this: --update-checksums, --no-frozen-lockfile, and --force all fail the same way, and dropping the field is rejected as a missing checksum. Edit ${join(dir, 'pnpm-lock.yaml')} instead, changing the entry's "integrity" to the sha512 pnpm printed above as "Got" and its "version" to the release those contents carry — pnpm names it as "Actual package in the store" when the cached copy disagrees. Both lines must move together, because the store keys contents by version. Confirm the new contents are the release you intended before you edit.\n`)
++  }
+   if (result.exitCode !== 0) process.stderr.write(`dsh: plugin command failed; diagnostics: ${result.logPath}\n`)
+   if (result.exitCode !== 0 && args.some(argument => /^git\+|^github:|\.git(?:#|$)/.test(argument))) {
+     process.stderr.write(`dsh: git-hosted plugins build on install via their prepare script, which pnpm blocks until allowed — add the exact key pnpm printed above under allowBuilds in ${join(resolveProfileDir(profile), 'pnpm-workspace.yaml')}, then re-run\n`)
+diff --git a/packages/boot/plugin-manager/src/operations.ts b/packages/boot/plugin-manager/src/operations.ts
+index b9a36d6083..c6939affc1 100644
+--- a/packages/boot/plugin-manager/src/operations.ts
++++ b/packages/boot/plugin-manager/src/operations.ts
+@@ -15,6 +15,7 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
+ import { parseInstallSpec } from './install-spec.ts'
+ import { awaitTreeGone, leadsOwnGroup, treeAlive, type RunTree } from './run-tree.ts'
+ import { incompatiblePlugin } from './failure.ts'
++import { classifyInstallFailure } from './install-failure.ts'
+ import type { IncompatiblePlugin, PackageResult, Registry } from './types.ts'
+ export { setProfileVersionExemption, readProfileVersionExemptions } from '@deepseek-ai/dsh-app-boot'
+ 
+@@ -36,7 +37,7 @@ export interface PackageOperationOptions {
+   args?: readonly string[]
+   /** Application runtime environment, applied only to this package operation. */
+   env?: Readonly<Record<string, string>>
+-  /** CLI inherits authentication and terminal descriptors; service scrubs secrets and captures output. */
++  /** CLI keeps the caller's environment and terminal input; service scrubs secrets and takes no input. */
+   execution: 'cli' | 'service'
+   signal?: AbortSignal
+   outputBytes: number
+@@ -44,10 +45,9 @@ export interface PackageOperationOptions {
+   activateNewBundles?: boolean
+   lockWaitMs?: number
+   /**
+-   * Terminate the run once its captured output has been silent for this long, in
++   * Terminate the run once its output has been silent for this long, in
+    * milliseconds. A run stopped this way reports `timedOut`; without a bound, a
+-   * child that stops progressing without exiting holds its caller forever. A run
+-   * with inherited descriptors captures nothing and is never bound.
++   * child that stops progressing without exiting holds its caller forever.
+    */
+   idleTimeoutMs?: number
+   /** Bound on the pre-install registry lookup, in milliseconds; without one a fixed bound applies. */
+@@ -279,7 +279,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
+  * @param args Pnpm arguments, before relative path anchoring.
+  * @param options Output, activation and cancellation policy.
+  * @returns Exit status, whether the silence bound stopped the run, and the diagnostic path.
+- * A compatibility denial returns exit code 1. Service output is bounded; CLI output uses inherited descriptors.
++ * A compatibility denial returns exit code 1. Every run captures output; a CLI run forwards it through `onOutput`.
+  * The diagnostic file is closed on return or rejection, including preparation and spawn failures.
+  */
+ export async function runProfilePnpm(
+@@ -351,14 +351,19 @@ export async function runProfilePnpm(
+   }
+   if (preflight.length > 0) return await rejected(preflight, 'nothing was installed')
+   const cancellation = new AbortController()
+-  // A service run captures output, so execa terminates the tree it leads when the
+-  // run is killed: a lifecycle script outlives the pnpm process that started it.
+-  // The CLI keeps the caller's process group, so an interrupt still reaches it.
++  // Every run captures output, which is what makes the silence bound and the
++  // failure classification possible at all: an inherited descriptor produces no
++  // chunk to observe, so a run that stops printing without exiting holds its
++  // caller forever and leaves the diagnostic log empty. Capturing also keeps the
++  // two executions on one path, so a CLI run's failure is classified exactly like
++  // a service run's. `onOutput` restores the live terminal the CLI user expects.
++  // The process group still differs: a service run is killed as a tree, while the
++  // CLI keeps the caller's group so an interrupt reaches it.
+   const grouped = leadsOwnGroup(options.execution)
+   const child = execa(options.command ?? 'pnpm', [...options.args ?? [], ...args.map(arg => anchorPathSpec(arg, context.cwd))], {
+     cwd: dir, env: environment, extendEnv: false, reject: false,
+-    stdout: options.execution === 'cli' ? 'inherit' : 'pipe',
+-    stderr: options.execution === 'cli' ? 'inherit' : 'pipe',
++    stdout: 'pipe',
++    stderr: 'pipe',
+     killDescendants: options.execution === 'service',
+     buffer: false, stdin: options.execution === 'cli' ? 'inherit' : 'ignore', cancelSignal: options.signal === undefined
+       ? cancellation.signal : AbortSignal.any([cancellation.signal, options.signal]),
+@@ -373,13 +378,14 @@ export async function runProfilePnpm(
+   /** The first failure a reading hit before that cut, which the run still reports. */
+   let failure: Error | undefined
+   let idleTimer: NodeJS.Timeout | undefined
+-  /** The silence bound: a captured run that stops printing without exiting is terminated, never awaited. */
++  /** The silence bound: a run that stops printing without exiting is terminated, never awaited. */
+   const armIdle = (): void => {
+     if (control.settled || options.idleTimeoutMs === undefined) return
+     clearTimeout(idleTimer)
+     idleTimer = setTimeout(() => {
+       control.stalled = true
+       // execa's kill reaches the whole tree of a service run, and escalates on its own.
++      // A CLI run shares the caller's group, so this reaches the pnpm process it started.
+       child.kill()
+     }, options.idleTimeoutMs)
+   }
+@@ -410,8 +416,8 @@ export async function runProfilePnpm(
+   // The drain decides whether a failure surfaces, so each reading is claimed now:
+   // an unclaimed rejection would be reported as unhandled while the pipes drain.
+   for (const collector of collectors) void collector.catch(() => { /* reported through `failure` and the settled readings */ })
+-  // Inherited descriptors hand pnpm the terminal, so there is no captured output
+-  // for a silence bound to observe: it would fire on a healthy run.
++  // A run that captures nothing (a test double, or a future execution mode) has no
++  // chunk to observe, so the bound would fire on a healthy run and stays unarmed.
+   if (collectors.length > 0) armIdle()
+   let exitCode: number
+   try {
+@@ -533,6 +539,11 @@ export async function runProfilePnpm(
+   return {
+     exitCode, output: output.toString('utf8'), truncated, logPath,
+     ...control.stalled ? { timedOut: true } : {}, ...incompatible.length > 0 ? { incompatible } : {},
++    // Every run now captures its tail, so a caller that only has this result can
++    // still say what failed instead of reporting an unclassified failure.
++    ...exitCode === 0 && !control.stalled ? {} : { kind: classifyInstallFailure({
++      log: output.toString('utf8'), ...control.stalled ? { timedOut: true } : {},
++    }) },
+   }
+ }
+ 
+diff --git a/packages/boot/plugin-manager/tests/operations.spec.ts b/packages/boot/plugin-manager/tests/operations.spec.ts
+index 014c314e28..561a74b61f 100644
+--- a/packages/boot/plugin-manager/tests/operations.spec.ts
++++ b/packages/boot/plugin-manager/tests/operations.spec.ts
+@@ -902,16 +902,27 @@ it.each(['cli', 'service'] as const)('uses the %s environment and interaction po
+   const options = command.run.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv; stdin: string; stdout: string; stderr: string }
+   for (const name of names) expect(options.env[name]).toBe(execution === 'cli' ? 'fixture-credential' : undefined)
+   expect(options.stdin).toBe(execution === 'cli' ? 'inherit' : 'ignore')
+-  expect(options.stdout).toBe(execution === 'cli' ? 'inherit' : 'pipe')
+-  expect(options.stderr).toBe(execution === 'cli' ? 'inherit' : 'pipe')
++  // Both executions capture output: the silence bound and the failure classification
++  // need chunks to observe, and the CLI restores its terminal through `onOutput`.
++  expect(options.stdout).toBe('pipe')
++  expect(options.stderr).toBe('pipe')
+ })
+ 
+-it('settles inherited CLI descriptors without requiring captured streams', async () => {
+-  const { context } = fixture()
+-  command.run.mockImplementationOnce(() => Object.assign(
+-    Promise.resolve({ exitCode: 0, failed: false }), { stdout: null, stderr: null, nodeChildProcess: new EventEmitter() },
+-  ))
+-  expect(await runPluginCommand(context, ['approve-builds'], { execution: 'cli', outputBytes: 100 })).toMatchObject({ exitCode: 0, output: '' })
++it('forwards captured CLI output to the caller and classifies the failure from it', async () => {
++  const { context, pnpm } = fixture()
++  const messages: string[] = []
++  // The fixture's own run answers the pre-install `pnpm view` lookup and then this
++  // output, so the assertion reads the run rather than a consumed one-shot mock.
++  pnpm.exitCode = 1
++  pnpm.output = '[ERR_PNPM_TARBALL_INTEGRITY] Got unexpected checksum\n'
++  const outcome = await runPluginCommand(context, ['add', 'floating'], {
++    execution: 'cli', outputBytes: 100, onOutput: (text) => { messages.push(text) },
++  })
++  // The captured tail reaches the caller live and lands in the diagnostic log,
++  // which is what lets a CLI failure be classified instead of reported as unknown.
++  expect(messages.join('')).toContain('ERR_PNPM_TARBALL_INTEGRITY')
++  expect(outcome).toMatchObject({ exitCode: 1, kind: 'integrity' })
++  expect(readFileSync(outcome.logPath, 'utf8')).toContain('ERR_PNPM_TARBALL_INTEGRITY')
+ })
+ 
+ it('reads the registry pnpm\'s own configuration names in the profile, and answers null for anything but a URL', async () => {
