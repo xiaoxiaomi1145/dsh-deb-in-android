@@ -1587,7 +1587,7 @@ index 653fa2c8dd..fd39973759 100644
    if (probe.status !== 0) return
    const root = stripGitLineTerminator(probe.stdout)
 DSH_EOF_8
-cat > "$TMP/patches/07-bundle-purge.patch" <<'DSH_EOF_9'
+cat > "$TMP/patches/07-sharp-wasm32.patch" <<'DSH_EOF_9'
 diff --git a/package.json b/package.json
 index a5e45dbf91..1e3fe52d43 100644
 --- a/package.json
@@ -1668,174 +1668,6 @@ index a5e45dbf91..1e3fe52d43 100644
 +    "@img/sharp-wasm32": "^0.35.5"
    }
  }
-diff --git a/packages/bundle/acp-app/cordis.patch.yml b/packages/bundle/acp-app/cordis.patch.yml
-index ca261faae8..2ae700f856 100644
---- a/packages/bundle/acp-app/cordis.patch.yml
-+++ b/packages/bundle/acp-app/cordis.patch.yml
-@@ -2,8 +2,7 @@
- 
- - id: system-prompt
-   config:
--    personaPrefix: >-
--      You are a coding agent powered by the {{model}} model.
-+    personaPrefix: ""
- 
- - id: session-title-llm
-   disabled: true
-diff --git a/packages/bundle/base/cordis.patch.yml b/packages/bundle/base/cordis.patch.yml
-index 7d63cf2667..3adcbab4b0 100644
---- a/packages/bundle/base/cordis.patch.yml
-+++ b/packages/bundle/base/cordis.patch.yml
-@@ -243,14 +243,14 @@
-     - id: sandbox-policy
-       name: '@deepseek-ai/dsh-sandbox-policy'
-       config:
--        mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
-+        mode: !!js process.env.DSH_PERMISSION_MODE ?? 'danger-full-access'
-         workspaceRoot: !!js process.cwd()
- 
-     - id: bash-sandbox
-       name: '@deepseek-ai/dsh-bash-sandbox'
-       disabled: !!js process.platform === 'win32'
-       config:
--        timeoutMs: 60000
-+        timeoutMs: 600000 # [dsh-purge] bash timeout raised
- 
-     - id: pwsh-sandbox
-       name: '@deepseek-ai/dsh-pwsh-sandbox'
-@@ -259,7 +259,7 @@
-     - id: approval
-       name: '@deepseek-ai/dsh-user-approval'
-       config:
--        policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
-+        policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'danger-full-access') === 'danger-full-access' ? 'never' : 'ask'"
- 
-     - id: permission
-       name: '@deepseek-ai/dsh-permission-presets'
-diff --git a/packages/bundle/headless/cordis.patch.yml b/packages/bundle/headless/cordis.patch.yml
-index cf224539eb..ae93c290ea 100644
---- a/packages/bundle/headless/cordis.patch.yml
-+++ b/packages/bundle/headless/cordis.patch.yml
-@@ -8,8 +8,7 @@
- 
- - id: system-prompt
-   config:
--    personaPrefix: >-
--      You are a coding agent powered by the {{model}} model.
-+    personaPrefix: ""
- 
- - id: tools
-   config:
-diff --git a/packages/bundle/sdk-app/cordis.patch.yml b/packages/bundle/sdk-app/cordis.patch.yml
-index af7f7409eb..75bf92826f 100644
---- a/packages/bundle/sdk-app/cordis.patch.yml
-+++ b/packages/bundle/sdk-app/cordis.patch.yml
-@@ -2,8 +2,7 @@
- 
- - id: system-prompt
-   config:
--    personaPrefix: >-
--      You are a coding agent powered by the {{model}} model.
-+    personaPrefix: ""
- 
- - id: session-title-llm
-   disabled: true
-diff --git a/packages/bundle/sdk-minimal/cordis.patch.yml b/packages/bundle/sdk-minimal/cordis.patch.yml
-index 79922e7113..1f843d2241 100644
---- a/packages/bundle/sdk-minimal/cordis.patch.yml
-+++ b/packages/bundle/sdk-minimal/cordis.patch.yml
-@@ -115,7 +115,7 @@
-       config:
-         includeHarnessIdentity: false
-         includeRuntimeContext: false
--        personaPrefix: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a helpful software engineer assistant.'
-+        personaPrefix: !!js process.env.DSH_SYSTEM_PROMPT ?? ''
- 
-     - id: tools
-       name: '@deepseek-ai/dsh-tools'
-diff --git a/packages/bundle/web-app/cordis.patch.yml b/packages/bundle/web-app/cordis.patch.yml
-index a56cda5e3a..4b9f61b118 100644
---- a/packages/bundle/web-app/cordis.patch.yml
-+++ b/packages/bundle/web-app/cordis.patch.yml
-@@ -16,8 +16,7 @@
- 
- - id: system-prompt
-   config:
--    personaPrefix: >-
--      You are a coding agent powered by the {{model}} model.
-+    personaPrefix: ""
- 
- # Full-text session search is opt-in (the base row's `openAt: never`). This
- # restatement keeps the Web values on one ephemeral in-memory index; a
-diff --git a/packages/bundle/web-app/presets/cordis.patch.yml b/packages/bundle/web-app/presets/cordis.patch.yml
-index 2ed95bb0b1..114e03c914 100644
---- a/packages/bundle/web-app/presets/cordis.patch.yml
-+++ b/packages/bundle/web-app/presets/cordis.patch.yml
-@@ -13,8 +13,7 @@
-           - id: persona
-             name: '@deepseek-ai/dsh-persona'
-             config:
--              prefix: >-
--                You are a coding agent powered by the {{model}} model.
-+              prefix: ""
-           - id: agent-instructions
-             name: '@deepseek-ai/dsh-agent-instructions'
-             config:
-diff --git a/packages/bundle/web-app/presets/minimal.patch.yml b/packages/bundle/web-app/presets/minimal.patch.yml
-index 043e34cb01..b622b0297b 100644
---- a/packages/bundle/web-app/presets/minimal.patch.yml
-+++ b/packages/bundle/web-app/presets/minimal.patch.yml
-@@ -11,7 +11,7 @@
-           - id: persona
-             name: '@deepseek-ai/dsh-persona'
-             config:
--              prefix: You are a helpful software engineer assistant.
-+              prefix: ""
-               complete: true
-               includeRuntimeContext: false
-           - id: tool-fs
-diff --git a/packages/bundle/web-app/presets/ptc.patch.yml b/packages/bundle/web-app/presets/ptc.patch.yml
-index e89cc60b85..21b6c84463 100644
---- a/packages/bundle/web-app/presets/ptc.patch.yml
-+++ b/packages/bundle/web-app/presets/ptc.patch.yml
-@@ -11,7 +11,7 @@
-           - id: persona
-             name: '@deepseek-ai/dsh-persona'
-             config:
--              prefix: You are a coding agent powered by the {{model}} model.
-+              prefix: ""
-           - id: agent-instructions
-             name: '@deepseek-ai/dsh-agent-instructions'
-             config:
-@@ -128,7 +128,5 @@
-             name: '@deepseek-ai/dsh-tool-present'
-           - id: tool-plugin-manager
-             name: '@deepseek-ai/dsh-plugin-manager/tools'
--            disabled: true
-           - id: tool-plugin-market
-             name: '@deepseek-ai/dsh-plugin-market/tools'
--            disabled: true
-diff --git a/packages/bundle/web-app/presets/standard.patch.yml b/packages/bundle/web-app/presets/standard.patch.yml
-index 225a756973..48586dcb7b 100644
---- a/packages/bundle/web-app/presets/standard.patch.yml
-+++ b/packages/bundle/web-app/presets/standard.patch.yml
-@@ -11,7 +11,7 @@
-           - id: persona
-             name: '@deepseek-ai/dsh-persona'
-             config:
--              prefix: You are a coding agent powered by the {{model}} model.
-+              prefix: ""
-           - id: agent-instructions
-             name: '@deepseek-ai/dsh-agent-instructions'
-             config:
-@@ -122,7 +122,5 @@
-             name: '@deepseek-ai/dsh-tool-present'
-           - id: tool-plugin-manager
-             name: '@deepseek-ai/dsh-plugin-manager/tools'
--            disabled: true
-           - id: tool-plugin-market
-             name: '@deepseek-ai/dsh-plugin-market/tools'
--            disabled: true
 DSH_EOF_9
 cat > "$TMP/patches/08-lockfile.patch" <<'DSH_EOF_10'
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
@@ -1870,10 +1702,25 @@ index 5f38bae356..64cad94f66 100644
    '@img/sharp-webcontainers-wasm32@0.35.5':
      dependencies:
 DSH_EOF_10
-cat > "$TMP/patches/MANIFEST.txt" <<'DSH_EOF_11'
+cat > "$TMP/patches/09-web-worker-context.patch" <<'DSH_EOF_11'
+diff --git a/apps/web/product-isolation.ts b/apps/web/product-isolation.ts
+index c716329078..5191b7480e 100644
+--- a/apps/web/product-isolation.ts
++++ b/apps/web/product-isolation.ts
+@@ -58,7 +58,7 @@ export function productWebBundleIsolation(repository: string, webRoot: string):
+             name: 'dsh-worker-build-inputs',
+             generateBundle: {
+               order: 'post',
+-              handler(_options, bundle) { inputs.workerBundle(bundle, this.getWatchFiles()) },
++              handler(_options, bundle) { inputs.workerBundle(bundle, typeof this.getWatchFiles === 'function' ? this.getWatchFiles() : []) },
+             },
+           }],
+         },
+DSH_EOF_11
+cat > "$TMP/patches/MANIFEST.txt" <<'DSH_EOF_12'
 base_tag=dsh-v0.2.1-rc.2
 base_commit=687f282e8625c6b8d11ff58211a90524be2e4317
-generated=2026-10-18T22:02:48+08:00
+generated=2026-10-21T23:35:24+08:00
 repo=/data/data/com.termux/files/home/deepseek-harness
 
 5c6ef68b66298b81c30242fee7a9f8c83c934ebe6695e7165a49da96b58efb49  01-plugin-manager-hang.patch  3 files
@@ -1882,10 +1729,11 @@ repo=/data/data/com.termux/files/home/deepseek-harness
 b4c92f4b0594675103b7668aa82ab115a13035d8f20fc302227ade3aea2fb0e8  04-session-jsonl.patch  2 files
 c40e45997cfe800a9718bf1dcea4988fe9829da9af1b0d4da4d843286541fa61  05-native-android.patch  4 files
 b767fc333f394d0dcdc2de209fda517ce79b6c46e08e3ff9a763155f15154404  06-perf-misc.patch  6 files
-0bf74ced9292d165de741407bd2699f714ba58967323f7d8e656e14fd183699a  07-bundle-purge.patch  11 files
+5867b666c20d35997b66aa8cbe27a98be35920c8f72e16a37652a113a496c50b  07-sharp-wasm32.patch  1 files
 4bd50118ac5f0f7e83bf9c67b6dbd3b38c816eaee034e6feb43cb2522a0691e9  08-lockfile.patch  1 files
-DSH_EOF_11
-cat > "$TMP/patches/addon/node-addon-require-builtin.patch" <<'DSH_EOF_12'
+c6e46f1805dba2e53ccd647f053132096f36e713b10bf9767b86178ac4874af1  09-web-worker-context.patch  1 files
+DSH_EOF_12
+cat > "$TMP/patches/addon/node-addon-require-builtin.patch" <<'DSH_EOF_13'
 diff --git a/packages/native/src/runtime_context/platform.cc b/packages/native/src/runtime_context/platform.cc
 index c743705..40aaecc 100644
 --- a/packages/native/src/runtime_context/platform.cc
@@ -1933,8 +1781,8 @@ index bbf7c47..56a9f69 100644
      return ['-shared', '-fPIC', '-pthread', ...args];
    }
    throw new Error(`unsupported platform for direct build: ${process.platform}`);
-DSH_EOF_12
-cat > "$TMP/env/billion-context-warm0.mjs" <<'DSH_EOF_13'
+DSH_EOF_13
+cat > "$TMP/env/billion-context-warm0.mjs" <<'DSH_EOF_14'
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -1960,8 +1808,8 @@ if (cfg.sessions.warmMaxBytes === 0) {
 cfg.sessions.warmMaxBytes = 0
 writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`)
 console.log('已写入:', file, '→ sessions.warmMaxBytes = 0')
-DSH_EOF_13
-cat > "$TMP/env/dsh-shim.sh" <<'DSH_EOF_14'
+DSH_EOF_14
+cat > "$TMP/env/dsh-shim.sh" <<'DSH_EOF_15'
 #!/bin/bash
 if [ -z "${DSH_HOME:-}" ]; then
   _dsh_shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -1984,7 +1832,7 @@ if [ "${DSH_USE_SOURCE:-0}" != "1" ] && [ -f "$PROJECT_DIR/apps/cli/lib/bin.js" 
   exec node "$PROJECT_DIR/apps/cli/lib/bin.js" "$@"
 fi
 exec ./node_modules/.bin/tsx apps/cli/src/bin.ts "$@"
-DSH_EOF_14
+DSH_EOF_15
 
 chmod +x "$TMP/scripts/"*.sh 2>/dev/null || true
 set +e

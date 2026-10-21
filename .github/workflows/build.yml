@@ -8,6 +8,10 @@ on:
         description: rebuild even if the release already exists
         required: false
         default: 'no'
+      notes:
+        description: extra release notes
+        required: false
+        default: ''
 permissions:
   contents: write
 jobs:
@@ -112,7 +116,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.s1.outputs.tag }}
           VER: ${{ needs.s1.outputs.ver }}
+          NOTES: ${{ github.event.inputs.notes }}
+          FORCE: ${{ github.event.inputs.force }}
         run: |
           set -eu
           f=$(ls dist/*.deb | head -1)
-          gh release create "$TAG" "$f" -t "$TAG" -n "dsh $VER termux aarch64"
+          if [ "${FORCE:-}" = "yes" ]; then gh release delete "$TAG" --yes --cleanup-tag || true; fi
+          body="dsh $VER termux aarch64"
+          if [ -n "${NOTES:-}" ]; then body=$(printf '%s\n\n%s' "$body" "$NOTES"); fi
+          gh release create "$TAG" "$f" -t "$TAG" -n "$body"

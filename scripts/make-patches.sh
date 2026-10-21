@@ -72,21 +72,14 @@ emit 06-perf-misc "启动性能与杂项修复" \
   packages/core/agent-loop/src/assistant-stream.ts \
   scripts/install-lefthook.mjs
 
-emit 07-bundle-purge "bundle 清单/persona 清理与根依赖整理" \
-  package.json \
-  packages/bundle/acp-app/cordis.patch.yml \
-  packages/bundle/base/cordis.patch.yml \
-  packages/bundle/headless/cordis.patch.yml \
-  packages/bundle/sdk-app/cordis.patch.yml \
-  packages/bundle/sdk-minimal/cordis.patch.yml \
-  packages/bundle/web-app/cordis.patch.yml \
-  packages/bundle/web-app/presets/cordis.patch.yml \
-  packages/bundle/web-app/presets/minimal.patch.yml \
-  packages/bundle/web-app/presets/ptc.patch.yml \
-  packages/bundle/web-app/presets/standard.patch.yml
+emit 07-sharp-wasm32 "根依赖补 @img/sharp-wasm32（Android 无原生二进制时的回退）" \
+  package.json
 
 emit 08-lockfile "pnpm-lock.yaml" \
   pnpm-lock.yaml
+
+emit 09-web-worker-context "apps/web 构建插件 getWatchFiles 兼容守卫" \
+  apps/web/product-isolation.ts
 
 {
   echo "base_tag=$BASE_TAG"
