@@ -12,7 +12,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -d "$REPO/.git" ] || { echo "不是 git 仓库: $REPO" >&2; exit 1; }
+[ -e "$REPO/.git" ] || { echo "不是 git 仓库: $REPO" >&2; exit 1; }
 mkdir -p "$OUT"
 rm -f "$OUT"/*.patch
 
@@ -65,8 +65,6 @@ emit 05-native-android "native/system Android aarch64 构建与 flock" \
   native/system/scripts/build.ts
 
 emit 06-perf-misc "启动性能与杂项修复" \
-  packages/util/values/src/index.ts \
-  packages/boot/config-editor/src/index.ts \
   packages/attachment/attachment-local/src/store.ts \
   packages/attachment/attachment-local/tests/file-store.spec.ts \
   packages/core/agent-loop/src/assistant-stream.ts \
@@ -80,6 +78,10 @@ emit 08-lockfile "pnpm-lock.yaml" \
 
 emit 09-web-worker-context "apps/web 构建插件 getWatchFiles 兼容守卫" \
   apps/web/product-isolation.ts
+
+emit 10-config-editor-composition "配置编辑器：每行配置只合并一次（N 次全量深拷贝 → 至多 2 次）" \
+  packages/boot/config-editor/src/index.ts \
+  packages/settings/settings/tests/configuration-inheritance.spec.ts
 
 {
   echo "base_tag=$BASE_TAG"

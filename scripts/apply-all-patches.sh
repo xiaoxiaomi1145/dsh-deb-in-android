@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -d "$REPO/.git" ] || die "不是 git 仓库: $REPO"
+[ -e "$REPO/.git" ] || die "不是 git 仓库: $REPO"
 [ -d "$PATCH_DIR" ] || die "找不到补丁目录: $PATCH_DIR"
 command -v git >/dev/null || die "缺少 git"
 

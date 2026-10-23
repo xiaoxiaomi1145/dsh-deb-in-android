@@ -1,0 +1,64 @@
+diff --git a/packages/boot/config-editor/src/index.ts b/packages/boot/config-editor/src/index.ts
+index ffec879f40..285e513d7f 100644
+--- a/packages/boot/config-editor/src/index.ts
++++ b/packages/boot/config-editor/src/index.ts
+@@ -52,17 +52,31 @@ export class ConfigEditor extends Service {
+     const entries = this.entries()
+     // An own config key can replace inherited config even when its value is undefined.
+     const overridden = new Set(loaded.patches.filter(patch => patch.insert === undefined && Object.hasOwn(patch, 'config')).map(patch => patch.id))
++    const layerPatches = loaded.layers.map(layer => layer.patches)
++    // Patches address one id each, so a row's inherited config never depends on
++    // another row's own config: one composition answers every row instead of
++    // one deep clone per overridden entry.
+     const composed = new Map<string, EntryOptions>()
+-    if (entries.some(entry => !overridden.has(entry.options.id))) {
+-      for (const row of flatten(composeEntries([...loaded.layers.map(layer => layer.patches), loaded.patches]))) {
+-        if (!composed.has(row.id)) composed.set(row.id, row)
++    for (const row of flatten(composeEntries([...layerPatches, loaded.patches]))) {
++      if (row.id !== undefined && !composed.has(row.id)) composed.set(row.id, row)
++    }
++    const inheritedRows = new Map<string, EntryOptions>()
++    if (overridden.size > 0) {
++      const withoutOwnConfigs = loaded.patches.map((patch) => {
++        if (patch.insert !== undefined || !Object.hasOwn(patch, 'config')) return patch
++        const rest = { ...patch }
++        Reflect.deleteProperty(rest, 'config')
++        return rest
++      })
++      for (const row of flatten(composeEntries([...layerPatches, withoutOwnConfigs]))) {
++        if (row.id !== undefined && !inheritedRows.has(row.id)) inheritedRows.set(row.id, row)
+       }
+     }
+     return entries.map(entry => ({
+       entry,
+-      inherited: overridden.has(entry.options.id)
+-        ? this.inherited(entry, loaded)
+-        : structuredClone((composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
++      inherited: structuredClone((overridden.has(entry.options.id)
++        ? inheritedRows.get(entry.options.id)?.config ?? {}
++        : composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
+       override: structuredClone((loaded.patches.findLast(
+         row => row.id === entry.options.id && row.config !== undefined,
+       )?.config ?? {}) as Record<string, unknown>),
+diff --git a/packages/settings/settings/tests/configuration-inheritance.spec.ts b/packages/settings/settings/tests/configuration-inheritance.spec.ts
+index b55c1aad6d..7aa310c2b0 100644
+--- a/packages/settings/settings/tests/configuration-inheritance.spec.ts
++++ b/packages/settings/settings/tests/configuration-inheritance.spec.ts
+@@ -38,7 +38,7 @@ it('shares composition for entries without config overrides while retaining grou
+       group: [{ id: 'nested', name: 'cordis:probe', config: { ordinary: 'original', count: 4 } }],
+     })
+     expect(inherited['first']).not.toHaveProperty('count')
+-    expect(compose).toHaveBeenCalledTimes(4)
++    expect(compose).toHaveBeenCalledTimes(2)
+     const nested = rows.find(row => row.entry.options.id === 'nested')!
+     nested.inherited['ordinary'] = 'mutated'
+     expect(nested.entry.options.config).toMatchObject({ ordinary: 'replacement' })
+@@ -84,7 +84,7 @@ it.each([0, 13, 190])('bounds composition work for 190 entries with %i config ov
+     const rows = restored.configEditor.configuration()
+     expect(rows).toHaveLength(190)
+     expect(rows.find(row => row.entry.options.id === 'generated-0')!.inherited).toEqual({ ordinary: 'value-0' })
+-    expect(compose).toHaveBeenCalledTimes(overrideCount + Number(overrideCount < rows.length))
++    expect(compose).toHaveBeenCalledTimes(overrideCount > 0 ? 2 : 1)
+   } finally {
+     compose.mockRestore()
+   }

@@ -1435,50 +1435,6 @@ index dde6ec2d06..27c08650b1 100644
    })
  
    it('refuses a stored object whose bytes no longer match the digest', async () => {
-diff --git a/packages/boot/config-editor/src/index.ts b/packages/boot/config-editor/src/index.ts
-index ffec879f40..af686bb41f 100644
---- a/packages/boot/config-editor/src/index.ts
-+++ b/packages/boot/config-editor/src/index.ts
-@@ -52,17 +52,33 @@ export class ConfigEditor extends Service {
-     const entries = this.entries()
-     // An own config key can replace inherited config even when its value is undefined.
-     const overridden = new Set(loaded.patches.filter(patch => patch.insert === undefined && Object.hasOwn(patch, 'config')).map(patch => patch.id))
-+    const layerPatches = loaded.layers.map(layer => layer.patches)
-+    // Patches address one id each, so a row's inherited config never depends on
-+    // another row's own config: one composition answers every row instead of
-+    // one deep clone per overridden entry.
-     const composed = new Map<string, EntryOptions>()
--    if (entries.some(entry => !overridden.has(entry.options.id))) {
--      for (const row of flatten(composeEntries([...loaded.layers.map(layer => layer.patches), loaded.patches]))) {
--        if (!composed.has(row.id)) composed.set(row.id, row)
-+    for (const row of flatten(composeEntries([...layerPatches, loaded.patches]))) {
-+      if (row.id !== undefined && !composed.has(row.id)) composed.set(row.id, row)
-+    }
-+    const inheritedRows = new Map<string, EntryOptions>()
-+    if (overridden.size > 0) {
-+      // A group row's config is its child list, so only leaf own configs drop out.
-+      const withoutOwnConfigs = loaded.patches.map((patch) => {
-+        if (patch.insert !== undefined || !Object.hasOwn(patch, 'config')) return patch
-+        if (patch.id !== undefined && composed.get(patch.id)?.group === true) return patch
-+        const rest = { ...patch }
-+        Reflect.deleteProperty(rest, 'config')
-+        return rest
-+      })
-+      for (const row of flatten(composeEntries([...layerPatches, withoutOwnConfigs]))) {
-+        if (row.id !== undefined && !inheritedRows.has(row.id)) inheritedRows.set(row.id, row)
-       }
-     }
-     return entries.map(entry => ({
-       entry,
--      inherited: overridden.has(entry.options.id)
--        ? this.inherited(entry, loaded)
--        : structuredClone((composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
-+      inherited: structuredClone((overridden.has(entry.options.id)
-+        ? inheritedRows.get(entry.options.id)?.config ?? {}
-+        : composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
-       override: structuredClone((loaded.patches.findLast(
-         row => row.id === entry.options.id && row.config !== undefined,
-       )?.config ?? {}) as Record<string, unknown>),
 diff --git a/packages/core/agent-loop/src/assistant-stream.ts b/packages/core/agent-loop/src/assistant-stream.ts
 index 8cbcc9e3c2..08cc5af91e 100644
 --- a/packages/core/agent-loop/src/assistant-stream.ts
@@ -1527,49 +1483,6 @@ index 8cbcc9e3c2..08cc5af91e 100644
    }
  
    /** Latest adapter-reported usage in the stream. */
-diff --git a/packages/util/values/src/index.ts b/packages/util/values/src/index.ts
-index 8664da7e34..b2b2b2038b 100644
---- a/packages/util/values/src/index.ts
-+++ b/packages/util/values/src/index.ts
-@@ -14,15 +14,37 @@ export function assertNever(value: never, context?: string): never {
-   throw new Error(`unreachable variant${context ? ` in ${context}` : ''}: ${rendered}`)
- }
- 
-+/** Native constructor sources, captured once: `toString` of the same intrinsic is stable per engine. */
-+const INTRINSIC_CONSTRUCTOR_SOURCE: Record<'Array' | 'Object', string> = {
-+  Array: Function.prototype.toString.call(Array),
-+  Object: Function.prototype.toString.call(Object),
-+}
-+
-+/** Per-prototype verdicts: a realm's intrinsic prototype keeps its shape for the process lifetime. */
-+const INTRINSIC_CONSTRUCTOR_CACHE: Record<'Array' | 'Object', WeakMap<object, boolean>> = {
-+  Array: new WeakMap(),
-+  Object: new WeakMap(),
-+}
-+
- /** Whether a realm-owned intrinsic prototype has a native constructor matching this engine's representation. */
- function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
-+  const cache = INTRINSIC_CONSTRUCTOR_CACHE[name]
-+  const cached = cache.get(prototype)
-+  if (cached !== undefined) return cached
-+  const verdict = computeIntrinsicConstructor(prototype, name)
-+  cache.set(prototype, verdict)
-+  return verdict
-+}
-+
-+/** Read the prototype's own constructor descriptor once; the caller memoizes the verdict. */
-+function computeIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
-   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'constructor')
-   const constructor: unknown = descriptor?.value
-   if (typeof constructor !== 'function') return false
-   try {
-     return constructor.name === name
-       && constructor.prototype === prototype
--      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
-+      && Function.prototype.toString.call(constructor) === INTRINSIC_CONSTRUCTOR_SOURCE[name]
-   } catch {
-     return false
-   }
 diff --git a/scripts/install-lefthook.mjs b/scripts/install-lefthook.mjs
 index 653fa2c8dd..fd39973759 100644
 --- a/scripts/install-lefthook.mjs
@@ -1717,10 +1630,76 @@ index c716329078..5191b7480e 100644
            }],
          },
 DSH_EOF_11
-cat > "$TMP/patches/MANIFEST.txt" <<'DSH_EOF_12'
+cat > "$TMP/patches/10-config-editor-composition.patch" <<'DSH_EOF_12'
+diff --git a/packages/boot/config-editor/src/index.ts b/packages/boot/config-editor/src/index.ts
+index ffec879f40..285e513d7f 100644
+--- a/packages/boot/config-editor/src/index.ts
++++ b/packages/boot/config-editor/src/index.ts
+@@ -52,17 +52,31 @@ export class ConfigEditor extends Service {
+     const entries = this.entries()
+     // An own config key can replace inherited config even when its value is undefined.
+     const overridden = new Set(loaded.patches.filter(patch => patch.insert === undefined && Object.hasOwn(patch, 'config')).map(patch => patch.id))
++    const layerPatches = loaded.layers.map(layer => layer.patches)
++    // Patches address one id each, so a row's inherited config never depends on
++    // another row's own config: one composition answers every row instead of
++    // one deep clone per overridden entry.
+     const composed = new Map<string, EntryOptions>()
+-    if (entries.some(entry => !overridden.has(entry.options.id))) {
+-      for (const row of flatten(composeEntries([...loaded.layers.map(layer => layer.patches), loaded.patches]))) {
+-        if (!composed.has(row.id)) composed.set(row.id, row)
++    for (const row of flatten(composeEntries([...layerPatches, loaded.patches]))) {
++      if (row.id !== undefined && !composed.has(row.id)) composed.set(row.id, row)
++    }
++    const inheritedRows = new Map<string, EntryOptions>()
++    if (overridden.size > 0) {
++      const withoutOwnConfigs = loaded.patches.map((patch) => {
++        if (patch.insert !== undefined || !Object.hasOwn(patch, 'config')) return patch
++        const rest = { ...patch }
++        Reflect.deleteProperty(rest, 'config')
++        return rest
++      })
++      for (const row of flatten(composeEntries([...layerPatches, withoutOwnConfigs]))) {
++        if (row.id !== undefined && !inheritedRows.has(row.id)) inheritedRows.set(row.id, row)
+       }
+     }
+     return entries.map(entry => ({
+       entry,
+-      inherited: overridden.has(entry.options.id)
+-        ? this.inherited(entry, loaded)
+-        : structuredClone((composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
++      inherited: structuredClone((overridden.has(entry.options.id)
++        ? inheritedRows.get(entry.options.id)?.config ?? {}
++        : composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
+       override: structuredClone((loaded.patches.findLast(
+         row => row.id === entry.options.id && row.config !== undefined,
+       )?.config ?? {}) as Record<string, unknown>),
+diff --git a/packages/settings/settings/tests/configuration-inheritance.spec.ts b/packages/settings/settings/tests/configuration-inheritance.spec.ts
+index b55c1aad6d..7aa310c2b0 100644
+--- a/packages/settings/settings/tests/configuration-inheritance.spec.ts
++++ b/packages/settings/settings/tests/configuration-inheritance.spec.ts
+@@ -38,7 +38,7 @@ it('shares composition for entries without config overrides while retaining grou
+       group: [{ id: 'nested', name: 'cordis:probe', config: { ordinary: 'original', count: 4 } }],
+     })
+     expect(inherited['first']).not.toHaveProperty('count')
+-    expect(compose).toHaveBeenCalledTimes(4)
++    expect(compose).toHaveBeenCalledTimes(2)
+     const nested = rows.find(row => row.entry.options.id === 'nested')!
+     nested.inherited['ordinary'] = 'mutated'
+     expect(nested.entry.options.config).toMatchObject({ ordinary: 'replacement' })
+@@ -84,7 +84,7 @@ it.each([0, 13, 190])('bounds composition work for 190 entries with %i config ov
+     const rows = restored.configEditor.configuration()
+     expect(rows).toHaveLength(190)
+     expect(rows.find(row => row.entry.options.id === 'generated-0')!.inherited).toEqual({ ordinary: 'value-0' })
+-    expect(compose).toHaveBeenCalledTimes(overrideCount + Number(overrideCount < rows.length))
++    expect(compose).toHaveBeenCalledTimes(overrideCount > 0 ? 2 : 1)
+   } finally {
+     compose.mockRestore()
+   }
+DSH_EOF_12
+cat > "$TMP/patches/MANIFEST.txt" <<'DSH_EOF_13'
 base_tag=dsh-v0.2.1-rc.2
 base_commit=687f282e8625c6b8d11ff58211a90524be2e4317
-generated=2026-10-21T23:35:24+08:00
+generated=2026-10-24T03:05:45+08:00
 repo=/data/data/com.termux/files/home/deepseek-harness
 
 5c6ef68b66298b81c30242fee7a9f8c83c934ebe6695e7165a49da96b58efb49  01-plugin-manager-hang.patch  3 files
@@ -1728,12 +1707,13 @@ repo=/data/data/com.termux/files/home/deepseek-harness
 00ebcfbc1f9bec156cd57f7a8d86643fbc34811bfa8ab2d481e39dd48330eea8  03-termux-fs.patch  5 files
 b4c92f4b0594675103b7668aa82ab115a13035d8f20fc302227ade3aea2fb0e8  04-session-jsonl.patch  2 files
 c40e45997cfe800a9718bf1dcea4988fe9829da9af1b0d4da4d843286541fa61  05-native-android.patch  4 files
-b767fc333f394d0dcdc2de209fda517ce79b6c46e08e3ff9a763155f15154404  06-perf-misc.patch  6 files
+8f09b82c0387dd0219d27c2d3617c8780833e3d1432c1483e25aca71144de5da  06-perf-misc.patch  4 files
 5867b666c20d35997b66aa8cbe27a98be35920c8f72e16a37652a113a496c50b  07-sharp-wasm32.patch  1 files
 4bd50118ac5f0f7e83bf9c67b6dbd3b38c816eaee034e6feb43cb2522a0691e9  08-lockfile.patch  1 files
 c6e46f1805dba2e53ccd647f053132096f36e713b10bf9767b86178ac4874af1  09-web-worker-context.patch  1 files
-DSH_EOF_12
-cat > "$TMP/patches/addon/node-addon-require-builtin.patch" <<'DSH_EOF_13'
+b4693eafb60b17dce39d171568b09a7a201ce664effd0e73bdcf48561ec1a4c5  10-config-editor-composition.patch  2 files
+DSH_EOF_13
+cat > "$TMP/patches/addon/node-addon-require-builtin.patch" <<'DSH_EOF_14'
 diff --git a/packages/native/src/runtime_context/platform.cc b/packages/native/src/runtime_context/platform.cc
 index c743705..40aaecc 100644
 --- a/packages/native/src/runtime_context/platform.cc
@@ -1781,8 +1761,8 @@ index bbf7c47..56a9f69 100644
      return ['-shared', '-fPIC', '-pthread', ...args];
    }
    throw new Error(`unsupported platform for direct build: ${process.platform}`);
-DSH_EOF_13
-cat > "$TMP/env/billion-context-warm0.mjs" <<'DSH_EOF_14'
+DSH_EOF_14
+cat > "$TMP/env/billion-context-warm0.mjs" <<'DSH_EOF_15'
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -1808,8 +1788,8 @@ if (cfg.sessions.warmMaxBytes === 0) {
 cfg.sessions.warmMaxBytes = 0
 writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`)
 console.log('已写入:', file, '→ sessions.warmMaxBytes = 0')
-DSH_EOF_14
-cat > "$TMP/env/dsh-shim.sh" <<'DSH_EOF_15'
+DSH_EOF_15
+cat > "$TMP/env/dsh-shim.sh" <<'DSH_EOF_16'
 #!/bin/bash
 if [ -z "${DSH_HOME:-}" ]; then
   _dsh_shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -1832,7 +1812,7 @@ if [ "${DSH_USE_SOURCE:-0}" != "1" ] && [ -f "$PROJECT_DIR/apps/cli/lib/bin.js" 
   exec node "$PROJECT_DIR/apps/cli/lib/bin.js" "$@"
 fi
 exec ./node_modules/.bin/tsx apps/cli/src/bin.ts "$@"
-DSH_EOF_15
+DSH_EOF_16
 
 chmod +x "$TMP/scripts/"*.sh 2>/dev/null || true
 set +e

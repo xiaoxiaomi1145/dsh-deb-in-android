@@ -147,50 +147,6 @@ index dde6ec2d06..27c08650b1 100644
    })
  
    it('refuses a stored object whose bytes no longer match the digest', async () => {
-diff --git a/packages/boot/config-editor/src/index.ts b/packages/boot/config-editor/src/index.ts
-index ffec879f40..af686bb41f 100644
---- a/packages/boot/config-editor/src/index.ts
-+++ b/packages/boot/config-editor/src/index.ts
-@@ -52,17 +52,33 @@ export class ConfigEditor extends Service {
-     const entries = this.entries()
-     // An own config key can replace inherited config even when its value is undefined.
-     const overridden = new Set(loaded.patches.filter(patch => patch.insert === undefined && Object.hasOwn(patch, 'config')).map(patch => patch.id))
-+    const layerPatches = loaded.layers.map(layer => layer.patches)
-+    // Patches address one id each, so a row's inherited config never depends on
-+    // another row's own config: one composition answers every row instead of
-+    // one deep clone per overridden entry.
-     const composed = new Map<string, EntryOptions>()
--    if (entries.some(entry => !overridden.has(entry.options.id))) {
--      for (const row of flatten(composeEntries([...loaded.layers.map(layer => layer.patches), loaded.patches]))) {
--        if (!composed.has(row.id)) composed.set(row.id, row)
-+    for (const row of flatten(composeEntries([...layerPatches, loaded.patches]))) {
-+      if (row.id !== undefined && !composed.has(row.id)) composed.set(row.id, row)
-+    }
-+    const inheritedRows = new Map<string, EntryOptions>()
-+    if (overridden.size > 0) {
-+      // A group row's config is its child list, so only leaf own configs drop out.
-+      const withoutOwnConfigs = loaded.patches.map((patch) => {
-+        if (patch.insert !== undefined || !Object.hasOwn(patch, 'config')) return patch
-+        if (patch.id !== undefined && composed.get(patch.id)?.group === true) return patch
-+        const rest = { ...patch }
-+        Reflect.deleteProperty(rest, 'config')
-+        return rest
-+      })
-+      for (const row of flatten(composeEntries([...layerPatches, withoutOwnConfigs]))) {
-+        if (row.id !== undefined && !inheritedRows.has(row.id)) inheritedRows.set(row.id, row)
-       }
-     }
-     return entries.map(entry => ({
-       entry,
--      inherited: overridden.has(entry.options.id)
--        ? this.inherited(entry, loaded)
--        : structuredClone((composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
-+      inherited: structuredClone((overridden.has(entry.options.id)
-+        ? inheritedRows.get(entry.options.id)?.config ?? {}
-+        : composed.get(entry.options.id)?.config ?? {}) as Record<string, unknown>),
-       override: structuredClone((loaded.patches.findLast(
-         row => row.id === entry.options.id && row.config !== undefined,
-       )?.config ?? {}) as Record<string, unknown>),
 diff --git a/packages/core/agent-loop/src/assistant-stream.ts b/packages/core/agent-loop/src/assistant-stream.ts
 index 8cbcc9e3c2..08cc5af91e 100644
 --- a/packages/core/agent-loop/src/assistant-stream.ts
@@ -239,49 +195,6 @@ index 8cbcc9e3c2..08cc5af91e 100644
    }
  
    /** Latest adapter-reported usage in the stream. */
-diff --git a/packages/util/values/src/index.ts b/packages/util/values/src/index.ts
-index 8664da7e34..b2b2b2038b 100644
---- a/packages/util/values/src/index.ts
-+++ b/packages/util/values/src/index.ts
-@@ -14,15 +14,37 @@ export function assertNever(value: never, context?: string): never {
-   throw new Error(`unreachable variant${context ? ` in ${context}` : ''}: ${rendered}`)
- }
- 
-+/** Native constructor sources, captured once: `toString` of the same intrinsic is stable per engine. */
-+const INTRINSIC_CONSTRUCTOR_SOURCE: Record<'Array' | 'Object', string> = {
-+  Array: Function.prototype.toString.call(Array),
-+  Object: Function.prototype.toString.call(Object),
-+}
-+
-+/** Per-prototype verdicts: a realm's intrinsic prototype keeps its shape for the process lifetime. */
-+const INTRINSIC_CONSTRUCTOR_CACHE: Record<'Array' | 'Object', WeakMap<object, boolean>> = {
-+  Array: new WeakMap(),
-+  Object: new WeakMap(),
-+}
-+
- /** Whether a realm-owned intrinsic prototype has a native constructor matching this engine's representation. */
- function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
-+  const cache = INTRINSIC_CONSTRUCTOR_CACHE[name]
-+  const cached = cache.get(prototype)
-+  if (cached !== undefined) return cached
-+  const verdict = computeIntrinsicConstructor(prototype, name)
-+  cache.set(prototype, verdict)
-+  return verdict
-+}
-+
-+/** Read the prototype's own constructor descriptor once; the caller memoizes the verdict. */
-+function computeIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
-   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'constructor')
-   const constructor: unknown = descriptor?.value
-   if (typeof constructor !== 'function') return false
-   try {
-     return constructor.name === name
-       && constructor.prototype === prototype
--      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
-+      && Function.prototype.toString.call(constructor) === INTRINSIC_CONSTRUCTOR_SOURCE[name]
-   } catch {
-     return false
-   }
 diff --git a/scripts/install-lefthook.mjs b/scripts/install-lefthook.mjs
 index 653fa2c8dd..fd39973759 100644
 --- a/scripts/install-lefthook.mjs
