@@ -1,8 +1,8 @@
 diff --git a/apps/cli/src/plugin.ts b/apps/cli/src/plugin.ts
-index 86d0cc7525..50bd26287c 100644
+index baad6e32f5..a3be62887e 100644
 --- a/apps/cli/src/plugin.ts
 +++ b/apps/cli/src/plugin.ts
-@@ -87,6 +87,13 @@ export async function runPlugin(profile: string, args: readonly string[], packag
+@@ -88,6 +88,13 @@ export async function runPlugin(profile: string, args: readonly string[], packag
      outputBytes: 16384,
      lockWaitMs: 120000,
      lookupTimeoutMs: 120000,
@@ -16,7 +16,7 @@ index 86d0cc7525..50bd26287c 100644
      onOutput: (text, stream) => { process[stream].write(text) },
    }
    const result = profile === 'desktop'
-@@ -99,6 +106,17 @@ export async function runPlugin(profile: string, args: readonly string[], packag
+@@ -100,6 +107,17 @@ export async function runPlugin(profile: string, args: readonly string[], packag
    for (const { name, version, runtimeVersion } of result.incompatible ?? []) {
      process.stderr.write(`dsh: to accept the risk, run: dsh plugin --profile ${profile} allow-version ${name}@${version} --dsh-version ${runtimeVersion} --accept-risk\n`)
    }
@@ -35,10 +35,10 @@ index 86d0cc7525..50bd26287c 100644
    if (result.exitCode !== 0 && args.some(argument => /^git\+|^github:|\.git(?:#|$)/.test(argument))) {
      process.stderr.write(`dsh: git-hosted plugins build on install via their prepare script, which pnpm blocks until allowed — add the exact key pnpm printed above under allowBuilds in ${join(resolveProfileDir(profile), 'pnpm-workspace.yaml')}, then re-run\n`)
 diff --git a/packages/boot/plugin-manager/src/operations.ts b/packages/boot/plugin-manager/src/operations.ts
-index b9a36d6083..c6939affc1 100644
+index e7b761ad3c..545c5e2ccf 100644
 --- a/packages/boot/plugin-manager/src/operations.ts
 +++ b/packages/boot/plugin-manager/src/operations.ts
-@@ -15,6 +15,7 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
+@@ -16,6 +16,7 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
  import { parseInstallSpec } from './install-spec.ts'
  import { awaitTreeGone, leadsOwnGroup, treeAlive, type RunTree } from './run-tree.ts'
  import { incompatiblePlugin } from './failure.ts'
@@ -46,7 +46,7 @@ index b9a36d6083..c6939affc1 100644
  import type { IncompatiblePlugin, PackageResult, Registry } from './types.ts'
  export { setProfileVersionExemption, readProfileVersionExemptions } from '@deepseek-ai/dsh-app-boot'
  
-@@ -36,7 +37,7 @@ export interface PackageOperationOptions {
+@@ -37,7 +38,7 @@ export interface PackageOperationOptions {
    args?: readonly string[]
    /** Application runtime environment, applied only to this package operation. */
    env?: Readonly<Record<string, string>>
@@ -55,7 +55,7 @@ index b9a36d6083..c6939affc1 100644
    execution: 'cli' | 'service'
    signal?: AbortSignal
    outputBytes: number
-@@ -44,10 +45,9 @@ export interface PackageOperationOptions {
+@@ -45,10 +46,9 @@ export interface PackageOperationOptions {
    activateNewBundles?: boolean
    lockWaitMs?: number
    /**
@@ -68,16 +68,18 @@ index b9a36d6083..c6939affc1 100644
     */
    idleTimeoutMs?: number
    /** Bound on the pre-install registry lookup, in milliseconds; without one a fixed bound applies. */
-@@ -279,7 +279,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
+@@ -288,9 +288,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
   * @param args Pnpm arguments, before relative path anchoring.
   * @param options Output, activation and cancellation policy.
   * @returns Exit status, whether the silence bound stopped the run, and the diagnostic path.
 - * A compatibility denial returns exit code 1. Service output is bounded; CLI output uses inherited descriptors.
+- * Unsupported Host activation returns exit code 1 with named diagnostics; installed dependencies remain,
+- * and no bundle selection changes are saved. Other reconciliation or filesystem errors reject.
 + * A compatibility denial returns exit code 1. Every run captures output; a CLI run forwards it through `onOutput`.
   * The diagnostic file is closed on return or rejection, including preparation and spawn failures.
   */
  export async function runProfilePnpm(
-@@ -351,14 +351,19 @@ export async function runProfilePnpm(
+@@ -362,14 +360,19 @@ export async function runProfilePnpm(
    }
    if (preflight.length > 0) return await rejected(preflight, 'nothing was installed')
    const cancellation = new AbortController()
@@ -102,7 +104,7 @@ index b9a36d6083..c6939affc1 100644
      killDescendants: options.execution === 'service',
      buffer: false, stdin: options.execution === 'cli' ? 'inherit' : 'ignore', cancelSignal: options.signal === undefined
        ? cancellation.signal : AbortSignal.any([cancellation.signal, options.signal]),
-@@ -373,13 +378,14 @@ export async function runProfilePnpm(
+@@ -384,13 +387,14 @@ export async function runProfilePnpm(
    /** The first failure a reading hit before that cut, which the run still reports. */
    let failure: Error | undefined
    let idleTimer: NodeJS.Timeout | undefined
@@ -118,7 +120,7 @@ index b9a36d6083..c6939affc1 100644
        child.kill()
      }, options.idleTimeoutMs)
    }
-@@ -410,8 +416,8 @@ export async function runProfilePnpm(
+@@ -421,8 +425,8 @@ export async function runProfilePnpm(
    // The drain decides whether a failure surfaces, so each reading is claimed now:
    // an unclaimed rejection would be reported as unhandled while the pipes drain.
    for (const collector of collectors) void collector.catch(() => { /* reported through `failure` and the settled readings */ })
@@ -129,7 +131,7 @@ index b9a36d6083..c6939affc1 100644
    if (collectors.length > 0) armIdle()
    let exitCode: number
    try {
-@@ -533,6 +539,11 @@ export async function runProfilePnpm(
+@@ -551,6 +555,11 @@ export async function runProfilePnpm(
    return {
      exitCode, output: output.toString('utf8'), truncated, logPath,
      ...control.stalled ? { timedOut: true } : {}, ...incompatible.length > 0 ? { incompatible } : {},
@@ -142,10 +144,10 @@ index b9a36d6083..c6939affc1 100644
  }
  
 diff --git a/packages/boot/plugin-manager/tests/operations.spec.ts b/packages/boot/plugin-manager/tests/operations.spec.ts
-index 014c314e28..561a74b61f 100644
+index c54260d214..6e5adfdc53 100644
 --- a/packages/boot/plugin-manager/tests/operations.spec.ts
 +++ b/packages/boot/plugin-manager/tests/operations.spec.ts
-@@ -902,16 +902,27 @@ it.each(['cli', 'service'] as const)('uses the %s environment and interaction po
+@@ -939,16 +939,27 @@ it.each(['cli', 'service'] as const)('uses the %s environment and interaction po
    const options = command.run.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv; stdin: string; stdout: string; stderr: string }
    for (const name of names) expect(options.env[name]).toBe(execution === 'cli' ? 'fixture-credential' : undefined)
    expect(options.stdin).toBe(execution === 'cli' ? 'inherit' : 'ignore')

@@ -6,7 +6,7 @@
 
 ```
 scripts/    构建、打包、原生模块编译脚本
-patches/    8 个 dsh 补丁（基线 dsh-v0.2.1-rc.2）
+patches/    10 个 dsh 补丁（基线 dsh-v0.2.2-alpha.2）
 patches/addon/  node-addon-require-builtin 的 Android 补丁
 env/        Termux 环境补丁（shim / billion-context 配置）
 dist/       打好的 .deb
@@ -80,7 +80,7 @@ bash scripts/apply-all-patches.sh --repo ~/deepseek-harness
 - 一次 20–40 分钟，磁盘吃满 14GB 左右
 
 ```bash
-bash scripts/build-in-docker.sh dsh-v0.2.1-rc.2
+bash scripts/build-in-docker.sh dsh-v0.2.2-alpha.2
 ```
 
 **默认（自托管 Termux）**

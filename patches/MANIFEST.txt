@@ -1,15 +1,15 @@
-base_tag=dsh-v0.2.1-rc.2
-base_commit=687f282e8625c6b8d11ff58211a90524be2e4317
-generated=2026-10-24T03:05:45+08:00
-repo=/data/data/com.termux/files/home/deepseek-harness
+base_tag=dsh-v0.2.2-alpha.2
+base_commit=f3803c96974ad4a94195fb97e5c637e9c2a3afe3
+generated=2026-10-29T01:42:58+08:00
+repo=/data/data/com.termux/files/usr/tmp/wt-022
 
-5c6ef68b66298b81c30242fee7a9f8c83c934ebe6695e7165a49da96b58efb49  01-plugin-manager-hang.patch  3 files
-95fdf7ef23357435a55b435035bab4c98aac9fe418a66df51ac563823ab03321  02-telemetry-rows.patch  4 files
-00ebcfbc1f9bec156cd57f7a8d86643fbc34811bfa8ab2d481e39dd48330eea8  03-termux-fs.patch  5 files
-b4c92f4b0594675103b7668aa82ab115a13035d8f20fc302227ade3aea2fb0e8  04-session-jsonl.patch  2 files
+24b51da2bec3e13f51141f42bada9aa969c8a254c12fef268e1f2bebdd78837a  01-plugin-manager-hang.patch  3 files
+de2306ddb8907ca51f942053bc3a9e9e6a1eb82a5a15b5a5796a5d41ced021b6  02-telemetry-rows.patch  4 files
+1683429d43ef44bd5ed69cd80e5419ca023619f9a6fa81ac668349dfc6e9b90e  03-termux-fs.patch  5 files
+e2fb1591095a10ba5bc268437e2906ff10f05daf293d0b8971625ccc456a686d  04-session-jsonl.patch  2 files
 c40e45997cfe800a9718bf1dcea4988fe9829da9af1b0d4da4d843286541fa61  05-native-android.patch  4 files
-8f09b82c0387dd0219d27c2d3617c8780833e3d1432c1483e25aca71144de5da  06-perf-misc.patch  4 files
-5867b666c20d35997b66aa8cbe27a98be35920c8f72e16a37652a113a496c50b  07-sharp-wasm32.patch  1 files
-4bd50118ac5f0f7e83bf9c67b6dbd3b38c816eaee034e6feb43cb2522a0691e9  08-lockfile.patch  1 files
+097d56a9b03d3955c9c88f5d2ea777fe95186c83407ab9a975936d27bc0afd15  06-perf-misc.patch  4 files
+a22918eeb64fd8eb8724863e2e2e060d5aa4fd8f859ac05ed1e7597df43fc2cf  07-sharp-wasm32.patch  1 files
+5d86e07ec836aca86efdb5c1c64280d4bf50ab16cca34f718c3dc3382c0f3581  08-lockfile.patch  1 files
 c6e46f1805dba2e53ccd647f053132096f36e713b10bf9767b86178ac4874af1  09-web-worker-context.patch  1 files
-b4693eafb60b17dce39d171568b09a7a201ce664effd0e73bdcf48561ec1a4c5  10-config-editor-composition.patch  2 files
+f1cc46d4ef32946e49ab1d6c321bf31efa9630213167764af73913217e955d53  10-config-editor-composition.patch  2 files

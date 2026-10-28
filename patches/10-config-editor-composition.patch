@@ -1,5 +1,5 @@
 diff --git a/packages/boot/config-editor/src/index.ts b/packages/boot/config-editor/src/index.ts
-index ffec879f40..285e513d7f 100644
+index 8fe686e478..c6691719fd 100644
 --- a/packages/boot/config-editor/src/index.ts
 +++ b/packages/boot/config-editor/src/index.ts
 @@ -52,17 +52,31 @@ export class ConfigEditor extends Service {

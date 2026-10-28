@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -d "$REPO/.git" ] || die "不是 git 仓库: $REPO"
+[ -e "$REPO/.git" ] || die "不是 git 仓库: $REPO"
 [ -d "$PATCH_DIR" ] || die "找不到补丁目录: $PATCH_DIR"
 command -v git >/dev/null || die "缺少 git"
 
@@ -201,10 +201,10 @@ NODE
 DSH_EOF_2
 cat > "$TMP/patches/01-plugin-manager-hang.patch" <<'DSH_EOF_3'
 diff --git a/apps/cli/src/plugin.ts b/apps/cli/src/plugin.ts
-index 86d0cc7525..50bd26287c 100644
+index baad6e32f5..a3be62887e 100644
 --- a/apps/cli/src/plugin.ts
 +++ b/apps/cli/src/plugin.ts
-@@ -87,6 +87,13 @@ export async function runPlugin(profile: string, args: readonly string[], packag
+@@ -88,6 +88,13 @@ export async function runPlugin(profile: string, args: readonly string[], packag
      outputBytes: 16384,
      lockWaitMs: 120000,
      lookupTimeoutMs: 120000,
@@ -218,7 +218,7 @@ index 86d0cc7525..50bd26287c 100644
      onOutput: (text, stream) => { process[stream].write(text) },
    }
    const result = profile === 'desktop'
-@@ -99,6 +106,17 @@ export async function runPlugin(profile: string, args: readonly string[], packag
+@@ -100,6 +107,17 @@ export async function runPlugin(profile: string, args: readonly string[], packag
    for (const { name, version, runtimeVersion } of result.incompatible ?? []) {
      process.stderr.write(`dsh: to accept the risk, run: dsh plugin --profile ${profile} allow-version ${name}@${version} --dsh-version ${runtimeVersion} --accept-risk\n`)
    }
@@ -237,10 +237,10 @@ index 86d0cc7525..50bd26287c 100644
    if (result.exitCode !== 0 && args.some(argument => /^git\+|^github:|\.git(?:#|$)/.test(argument))) {
      process.stderr.write(`dsh: git-hosted plugins build on install via their prepare script, which pnpm blocks until allowed — add the exact key pnpm printed above under allowBuilds in ${join(resolveProfileDir(profile), 'pnpm-workspace.yaml')}, then re-run\n`)
 diff --git a/packages/boot/plugin-manager/src/operations.ts b/packages/boot/plugin-manager/src/operations.ts
-index b9a36d6083..c6939affc1 100644
+index e7b761ad3c..545c5e2ccf 100644
 --- a/packages/boot/plugin-manager/src/operations.ts
 +++ b/packages/boot/plugin-manager/src/operations.ts
-@@ -15,6 +15,7 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
+@@ -16,6 +16,7 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
  import { parseInstallSpec } from './install-spec.ts'
  import { awaitTreeGone, leadsOwnGroup, treeAlive, type RunTree } from './run-tree.ts'
  import { incompatiblePlugin } from './failure.ts'
@@ -248,7 +248,7 @@ index b9a36d6083..c6939affc1 100644
  import type { IncompatiblePlugin, PackageResult, Registry } from './types.ts'
  export { setProfileVersionExemption, readProfileVersionExemptions } from '@deepseek-ai/dsh-app-boot'
  
-@@ -36,7 +37,7 @@ export interface PackageOperationOptions {
+@@ -37,7 +38,7 @@ export interface PackageOperationOptions {
    args?: readonly string[]
    /** Application runtime environment, applied only to this package operation. */
    env?: Readonly<Record<string, string>>
@@ -257,7 +257,7 @@ index b9a36d6083..c6939affc1 100644
    execution: 'cli' | 'service'
    signal?: AbortSignal
    outputBytes: number
-@@ -44,10 +45,9 @@ export interface PackageOperationOptions {
+@@ -45,10 +46,9 @@ export interface PackageOperationOptions {
    activateNewBundles?: boolean
    lockWaitMs?: number
    /**
@@ -270,16 +270,18 @@ index b9a36d6083..c6939affc1 100644
     */
    idleTimeoutMs?: number
    /** Bound on the pre-install registry lookup, in milliseconds; without one a fixed bound applies. */
-@@ -279,7 +279,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
+@@ -288,9 +288,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
   * @param args Pnpm arguments, before relative path anchoring.
   * @param options Output, activation and cancellation policy.
   * @returns Exit status, whether the silence bound stopped the run, and the diagnostic path.
 - * A compatibility denial returns exit code 1. Service output is bounded; CLI output uses inherited descriptors.
+- * Unsupported Host activation returns exit code 1 with named diagnostics; installed dependencies remain,
+- * and no bundle selection changes are saved. Other reconciliation or filesystem errors reject.
 + * A compatibility denial returns exit code 1. Every run captures output; a CLI run forwards it through `onOutput`.
   * The diagnostic file is closed on return or rejection, including preparation and spawn failures.
   */
  export async function runProfilePnpm(
-@@ -351,14 +351,19 @@ export async function runProfilePnpm(
+@@ -362,14 +360,19 @@ export async function runProfilePnpm(
    }
    if (preflight.length > 0) return await rejected(preflight, 'nothing was installed')
    const cancellation = new AbortController()
@@ -304,7 +306,7 @@ index b9a36d6083..c6939affc1 100644
      killDescendants: options.execution === 'service',
      buffer: false, stdin: options.execution === 'cli' ? 'inherit' : 'ignore', cancelSignal: options.signal === undefined
        ? cancellation.signal : AbortSignal.any([cancellation.signal, options.signal]),
-@@ -373,13 +378,14 @@ export async function runProfilePnpm(
+@@ -384,13 +387,14 @@ export async function runProfilePnpm(
    /** The first failure a reading hit before that cut, which the run still reports. */
    let failure: Error | undefined
    let idleTimer: NodeJS.Timeout | undefined
@@ -320,7 +322,7 @@ index b9a36d6083..c6939affc1 100644
        child.kill()
      }, options.idleTimeoutMs)
    }
-@@ -410,8 +416,8 @@ export async function runProfilePnpm(
+@@ -421,8 +425,8 @@ export async function runProfilePnpm(
    // The drain decides whether a failure surfaces, so each reading is claimed now:
    // an unclaimed rejection would be reported as unhandled while the pipes drain.
    for (const collector of collectors) void collector.catch(() => { /* reported through `failure` and the settled readings */ })
@@ -331,7 +333,7 @@ index b9a36d6083..c6939affc1 100644
    if (collectors.length > 0) armIdle()
    let exitCode: number
    try {
-@@ -533,6 +539,11 @@ export async function runProfilePnpm(
+@@ -551,6 +555,11 @@ export async function runProfilePnpm(
    return {
      exitCode, output: output.toString('utf8'), truncated, logPath,
      ...control.stalled ? { timedOut: true } : {}, ...incompatible.length > 0 ? { incompatible } : {},
@@ -344,10 +346,10 @@ index b9a36d6083..c6939affc1 100644
  }
  
 diff --git a/packages/boot/plugin-manager/tests/operations.spec.ts b/packages/boot/plugin-manager/tests/operations.spec.ts
-index 014c314e28..561a74b61f 100644
+index c54260d214..6e5adfdc53 100644
 --- a/packages/boot/plugin-manager/tests/operations.spec.ts
 +++ b/packages/boot/plugin-manager/tests/operations.spec.ts
-@@ -902,16 +902,27 @@ it.each(['cli', 'service'] as const)('uses the %s environment and interaction po
+@@ -939,16 +939,27 @@ it.each(['cli', 'service'] as const)('uses the %s environment and interaction po
    const options = command.run.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv; stdin: string; stdout: string; stderr: string }
    for (const name of names) expect(options.env[name]).toBe(execution === 'cli' ? 'fixture-credential' : undefined)
    expect(options.stdin).toBe(execution === 'cli' ? 'inherit' : 'ignore')
@@ -428,7 +430,7 @@ index 0397ffaf35..43c89c5e18 100644
    })
  })
 diff --git a/packages/boot/app-boot/src/index.ts b/packages/boot/app-boot/src/index.ts
-index fded02c9c8..fddbd4d1a7 100644
+index acab24ebe4..adce4a9457 100644
 --- a/packages/boot/app-boot/src/index.ts
 +++ b/packages/boot/app-boot/src/index.ts
 @@ -7,7 +7,8 @@
@@ -439,9 +441,9 @@ index fded02c9c8..fddbd4d1a7 100644
 +import { existsSync, readFileSync } from 'node:fs'
 +import { tmpdir } from 'node:os'
  import { inspect, parseEnv } from 'node:util'
- import { basename, dirname, isAbsolute, resolve } from 'node:path'
- import * as yaml from 'js-yaml'
-@@ -17,7 +18,7 @@ import Include, { applyEntryPatches, entryListSchema, type PatchOptions } from '
+ import { captureStartupComposition, type StartupCompositionDiagnostic } from './startup-diagnostics.ts'
+ export type { StartupCompositionDiagnostic, StartupPluginState, StartupServiceState } from './startup-diagnostics.ts'
+@@ -19,7 +20,7 @@ import Include, { applyEntryPatches, entryListSchema, type PatchOptions } from '
  import Group from '@deepseek-ai/cordis-plugin-group'
  import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
  import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
@@ -450,7 +452,7 @@ index fded02c9c8..fddbd4d1a7 100644
  export { sanitizeProfile } from './profile-sanitize.ts'
  export { getDshRuntimeVersion, evaluatePluginCompatibility, pluginCompatibilityWarning, type PluginCompatibility } from './plugin-compatibility.ts'
  export {
-@@ -224,6 +225,27 @@ function readEnvLayer(
+@@ -222,6 +223,27 @@ function readEnvLayer(
    return { path, values }
  }
  
@@ -478,7 +480,7 @@ index fded02c9c8..fddbd4d1a7 100644
  /**
   * Load the product CLI's inherited > invoking-directory `.env` > Harness-home
   * `.env` snapshot. The Harness home resolves before either file; both files
-@@ -251,6 +273,10 @@ export function loadLayeredEnv(
+@@ -249,6 +271,10 @@ export function loadLayeredEnv(
        if (process.env[name] === undefined) process.env[name] = value
      }
    }
@@ -541,7 +543,7 @@ index e2ebfad5ce..5f737d8c13 100644
    return patches
  }
 diff --git a/packages/boot/app-boot/tests/app-boot.spec.ts b/packages/boot/app-boot/tests/app-boot.spec.ts
-index 5e83da0b17..e075665ea3 100644
+index 48f2e4456c..a7c2ead746 100644
 --- a/packages/boot/app-boot/tests/app-boot.spec.ts
 +++ b/packages/boot/app-boot/tests/app-boot.spec.ts
 @@ -7,7 +7,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -656,7 +658,7 @@ index 5e83da0b17..e075665ea3 100644
 DSH_EOF_4
 cat > "$TMP/patches/03-termux-fs.patch" <<'DSH_EOF_5'
 diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
-index a9d97fd6ac..1b0301a291 100644
+index 0cc11fa03b..bcf84dd99f 100644
 --- a/packages/fs/fs-local/src/fsio.ts
 +++ b/packages/fs/fs-local/src/fsio.ts
 @@ -6,8 +6,8 @@
@@ -670,7 +672,7 @@ index a9d97fd6ac..1b0301a291 100644
  import type { BigIntStats, Dirent, Stats } from 'node:fs'
  import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
  import { TextDecoder, promisify } from 'node:util'
-@@ -27,6 +27,18 @@ function isEEXIST(error: unknown): boolean {
+@@ -28,6 +28,18 @@ function isEEXIST(error: unknown): boolean {
    return error instanceof Error && 'code' in error && error.code === 'EEXIST'
  }
  
@@ -689,7 +691,7 @@ index a9d97fd6ac..1b0301a291 100644
  /**
   * A path component that is expected to be a directory is a regular file (e.g.
   * resolving `afile/child.txt` when `afile` is a file). Like `ENOENT`, the target
-@@ -93,6 +105,8 @@ export interface FsIoInternals {
+@@ -94,6 +106,8 @@ export interface FsIoInternals {
    replaceFile?: (replaced: string, replacement: string) => Promise<void>
    /** Override the hard-link no-replace publication boundary. */
    linkFile?: (existingPath: string, newPath: string) => Promise<void>
@@ -698,7 +700,7 @@ index a9d97fd6ac..1b0301a291 100644
    /** Override target inspection after guarded publication fails. */
    inspectPublicationTarget?: (path: string) => Promise<BigIntStats>
    /** Override staging-directory removal for commit-point failure coverage. */
-@@ -570,6 +584,50 @@ async function throwGuardedCreateFailure(
+@@ -584,6 +598,50 @@ async function throwGuardedCreateFailure(
    throw new FsError(`cannot write "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
  }
  
@@ -749,7 +751,7 @@ index a9d97fd6ac..1b0301a291 100644
  /**
   * Atomically replace a file through a private, synced staging file in the same directory.
   * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
-@@ -606,6 +664,8 @@ export async function writeFileAtomic(
+@@ -620,6 +678,8 @@ export async function writeFileAtomic(
    const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
    const replaceFile = internals.replaceFile ?? replaceFileWin32
    const linkFile = internals.linkFile ?? link
@@ -758,7 +760,7 @@ index a9d97fd6ac..1b0301a291 100644
    const inspectPublicationTarget = internals.inspectPublicationTarget
      ?? (path => lstat(path, { bigint: true }))
    const removeStagingDir = internals.removeStagingDir
-@@ -631,11 +691,14 @@ export async function writeFileAtomic(
+@@ -645,11 +705,14 @@ export async function writeFileAtomic(
  
      throwIfAborted(signal, 'write')
      if (createIfAbsent !== undefined) {
@@ -1052,10 +1054,10 @@ index 7369ef521c..96f08ee8d1 100644
 +  })
  })
 diff --git a/packages/fs/tool-fs-search/tests/tools.spec.ts b/packages/fs/tool-fs-search/tests/tools.spec.ts
-index c261d139a6..dcc2adf909 100644
+index 5763aacc15..22f0269efc 100644
 --- a/packages/fs/tool-fs-search/tests/tools.spec.ts
 +++ b/packages/fs/tool-fs-search/tests/tools.spec.ts
-@@ -22,7 +22,6 @@ import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH, type ToolExecution, type Too
+@@ -24,7 +24,6 @@ import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH, type ToolExecution, type Too
  import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
  import type { SubprocessCollectedOutputs, SubprocessHandle, SubprocessOutcome, SubprocessOutputRead, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
  import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
@@ -1063,7 +1065,7 @@ index c261d139a6..dcc2adf909 100644
  import { SpillLocator, SpillStore } from '@deepseek-ai/dsh-spill'
  import type { SaveTextSpill, SpillRef } from '@deepseek-ai/dsh-spill'
  import * as ToolFsSearch from '@deepseek-ai/dsh-tool-fs-search'
-@@ -414,7 +413,7 @@ describe('workdir derivation and signal forwarding', () => {
+@@ -420,7 +419,7 @@ describe('workdir derivation and signal forwarding', () => {
      const spec = subprocess.spawns[0]
      // --no-config keeps a host RIPGREP_CONFIG_PATH from injecting a
      // preprocessor into this unconfined spawn.
@@ -1072,7 +1074,7 @@ index c261d139a6..dcc2adf909 100644
      expect(spec?.stdio.stdin).toBe('ignore')
      // stdout gets the tool's parse budget; stderr is a diagnostic excerpt;
      // both are the seam's diagnostic-tail shape (no spill files requested).
-@@ -531,13 +530,14 @@ describe('workdir derivation and signal forwarding', () => {
+@@ -537,13 +536,14 @@ describe('workdir derivation and signal forwarding', () => {
      expect(text(result)).toContain('aborted before completion')
    })
  
@@ -1091,7 +1093,7 @@ index c261d139a6..dcc2adf909 100644
      expect(resolveRgPath()).toBe(resolveRgPath())
    })
  
-@@ -757,7 +757,7 @@ describe('glob results', () => {
+@@ -763,7 +763,7 @@ describe('glob results', () => {
      subprocess.handler = () => runResult('sub/a.ts\n')
      const result = await call(ctx, 'glob', { pattern: '*.ts', path: 'sub' })
      expect(result.isError).toBe(false)
@@ -1140,7 +1142,7 @@ index ff01e9a038..95a358bb8e 100644
      /* v8 ignore else -- a non-collision filesystem error propagates unchanged. */
      if (isEEXIST(error)) return false
 diff --git a/packages/session/session-persistence-jsonl/src/index.ts b/packages/session/session-persistence-jsonl/src/index.ts
-index 3c3c13589f..f2eaad1621 100644
+index f8351fa9ee..c3c68c942f 100644
 --- a/packages/session/session-persistence-jsonl/src/index.ts
 +++ b/packages/session/session-persistence-jsonl/src/index.ts
 @@ -14,7 +14,7 @@ import {
@@ -1152,7 +1154,7 @@ index 3c3c13589f..f2eaad1621 100644
  import { dirname, join, resolve } from 'node:path'
  import { performance } from 'node:perf_hooks'
  import { scheduler } from 'node:timers/promises'
-@@ -1294,30 +1294,31 @@ class JsonlSessionPersistence extends SessionPersistence {
+@@ -1296,30 +1296,31 @@ class JsonlSessionPersistence extends SessionPersistence {
      await this.syncDirPosix(project)
      await this.rejectExistingLog(finalPath, id)
      const tmp = await this.writeSyncedTempFile(finalPath, content)
@@ -1287,7 +1289,7 @@ index ca995d9c03..5b6b13cdc5 100644
 DSH_EOF_7
 cat > "$TMP/patches/06-perf-misc.patch" <<'DSH_EOF_8'
 diff --git a/packages/attachment/attachment-local/src/store.ts b/packages/attachment/attachment-local/src/store.ts
-index 7fab679e34..431423e6a4 100644
+index 88ab2c9d27..3b3cd0097b 100644
 --- a/packages/attachment/attachment-local/src/store.ts
 +++ b/packages/attachment/attachment-local/src/store.ts
 @@ -2,7 +2,7 @@
@@ -1502,92 +1504,26 @@ index 653fa2c8dd..fd39973759 100644
 DSH_EOF_8
 cat > "$TMP/patches/07-sharp-wasm32.patch" <<'DSH_EOF_9'
 diff --git a/package.json b/package.json
-index a5e45dbf91..1e3fe52d43 100644
+index 9dccd6008b..0123ce58ad 100644
 --- a/package.json
 +++ b/package.json
-@@ -219,33 +219,40 @@
+@@ -222,6 +222,9 @@
+     "verify-provider-data": "tsx packages/llm/llm-pi-ai/scripts/gen-provider-data.ts --check",
      "verify-product-use": "tsx scripts/verify-product-use.ts"
    },
-   "devDependencies": {
--    "@deepseek-ai/dsh-hooks-claude-code": "workspace:*",
--    "@deepseek-ai/dsh-hooks-codex": "workspace:*",
--    "@deepseek-ai/dsh-tool-ralph": "workspace:*",
--    "@deepseek-ai/dsh-tool-terminal": "workspace:*",
-     "@deepseek-ai/dsh-agent": "workspace:*",
-     "@deepseek-ai/dsh-browser-use": "workspace:*",
--    "@deepseek-ai/dsh-experimental-browser-use-runtime": "workspace:*",
--    "@deepseek-ai/dsh-experimental-browser-use-playwright-mcp": "workspace:*",
-+    "@deepseek-ai/dsh-computer-use": "workspace:*",
-+    "@deepseek-ai/dsh-cua": "workspace:*",
-     "@deepseek-ai/dsh-experimental-browser-use-chrome-devtools-mcp": "workspace:*",
-+    "@deepseek-ai/dsh-experimental-browser-use-playwright-mcp": "workspace:*",
-+    "@deepseek-ai/dsh-experimental-browser-use-runtime": "workspace:*",
-     "@deepseek-ai/dsh-experimental-browser-use-stagehand-native": "workspace:*",
--    "@deepseek-ai/dsh-computer-use": "workspace:*",
-+    "@deepseek-ai/dsh-experimental-claude-code-mods": "workspace:*",
-     "@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp": "workspace:*",
-     "@deepseek-ai/dsh-experimental-computer-use-cua-driver-native": "workspace:*",
--    "@deepseek-ai/dsh-cua": "workspace:*",
--    "@deepseek-ai/dsh-experimental-claude-code-mods": "workspace:*",
-+    "@deepseek-ai/dsh-experimental-cua-macos": "workspace:*",
-+    "@deepseek-ai/dsh-experimental-tool-worktree": "workspace:*",
-+    "@deepseek-ai/dsh-experimental-worktree": "workspace:*",
-+    "@deepseek-ai/dsh-hooks-claude-code": "workspace:*",
-+    "@deepseek-ai/dsh-hooks-codex": "workspace:*",
-     "@deepseek-ai/dsh-llm-replay": "workspace:*",
-     "@deepseek-ai/dsh-mcp-client": "workspace:*",
-+    "@deepseek-ai/dsh-skill-office": "workspace:*",
-+    "@deepseek-ai/dsh-tool-ralph": "workspace:*",
-     "@deepseek-ai/dsh-tool-session-query": "workspace:*",
-+    "@deepseek-ai/dsh-tool-terminal": "workspace:*",
-+    "@deepseek-ai/dsh-tool-working-directory": "workspace:*",
-+    "@deepseek-ai/dsh-tool-workspace-dependencies": "workspace:*",
-     "@deepseek-ai/dsh-web-fetch-http": "workspace:*",
-+    "@deepseek-ai/dsh-working-directory": "workspace:*",
-     "@stylistic/eslint-plugin": "^5.10.0",
-     "@testing-library/dom": "^10.4.1",
-     "@testing-library/react": "^16.3.3",
-     "@types/js-yaml": "^4.0.9",
-     "@types/jsdom": "^28.0.3",
-     "@types/mdast": "^4.0.4",
--    "@types/papaparse": "^5.5.2",
-     "@types/node": "^22.20.1",
-+    "@types/papaparse": "^5.5.2",
-     "@types/react": "~18.3.1",
-     "@types/react-dom": "~18.3.0",
-     "@types/semver": "^7.8.0",
-@@ -255,7 +262,6 @@
-     "@yarnpkg/cli-dist": "4.18.0",
-     "eslint-plugin-sonarjs": "^4.2.0",
-     "execa": "^10.0.1",
--    "zod": "^4.4.3",
-     "extract-zip": "^2.0.1",
-     "fast-check": "^4.9.0",
-     "fflate": "^0.8.2",
-@@ -284,12 +290,9 @@
-     "vite": "8.2.2",
-     "vite-tsconfig-paths": "^6.1.1",
-     "vitest": "^4.1.11",
--    "@deepseek-ai/dsh-skill-office": "workspace:*",
--    "@deepseek-ai/dsh-tool-workspace-dependencies": "workspace:*",
--    "@deepseek-ai/dsh-tool-working-directory": "workspace:*",
--    "@deepseek-ai/dsh-working-directory": "workspace:*",
--    "@deepseek-ai/dsh-experimental-worktree": "workspace:*",
--    "@deepseek-ai/dsh-experimental-tool-worktree": "workspace:*",
--    "@deepseek-ai/dsh-experimental-cua-macos": "workspace:*"
-+    "zod": "^4.4.3"
-+  },
 +  "dependencies": {
 +    "@img/sharp-wasm32": "^0.35.5"
-   }
- }
++  },
+   "devDependencies": {
+     "@deepseek-ai/dsh-hooks-claude-code": "workspace:*",
+     "@deepseek-ai/dsh-hooks-codex": "workspace:*",
 DSH_EOF_9
 cat > "$TMP/patches/08-lockfile.patch" <<'DSH_EOF_10'
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
-index 5f38bae356..64cad94f66 100644
+index 3bb5b2fd3e..f931aded9e 100644
 --- a/pnpm-lock.yaml
 +++ b/pnpm-lock.yaml
-@@ -22,6 +22,10 @@ patchedDependencies:
+@@ -26,6 +26,10 @@ patchedDependencies:
  importers:
  
    .:
@@ -1596,9 +1532,9 @@ index 5f38bae356..64cad94f66 100644
 +        specifier: ^0.35.5
 +        version: 0.35.5
      devDependencies:
-       '@deepseek-ai/dsh-agent':
+       '@deepseek-ai/dsh-action-cards':
          specifier: workspace:*
-@@ -24488,7 +24492,6 @@ snapshots:
+@@ -26924,7 +26928,6 @@ snapshots:
    '@emnapi/runtime@1.11.3':
      dependencies:
        tslib: 2.8.1
@@ -1606,7 +1542,7 @@ index 5f38bae356..64cad94f66 100644
  
    '@emnapi/wasi-threads@1.2.1':
      dependencies:
-@@ -25020,7 +25023,6 @@ snapshots:
+@@ -27456,7 +27459,6 @@ snapshots:
    '@img/sharp-wasm32@0.35.5':
      dependencies:
        '@emnapi/runtime': 1.11.3
@@ -1632,7 +1568,7 @@ index c716329078..5191b7480e 100644
 DSH_EOF_11
 cat > "$TMP/patches/10-config-editor-composition.patch" <<'DSH_EOF_12'
 diff --git a/packages/boot/config-editor/src/index.ts b/packages/boot/config-editor/src/index.ts
-index ffec879f40..285e513d7f 100644
+index 8fe686e478..c6691719fd 100644
 --- a/packages/boot/config-editor/src/index.ts
 +++ b/packages/boot/config-editor/src/index.ts
 @@ -52,17 +52,31 @@ export class ConfigEditor extends Service {
@@ -1697,21 +1633,21 @@ index b55c1aad6d..7aa310c2b0 100644
    }
 DSH_EOF_12
 cat > "$TMP/patches/MANIFEST.txt" <<'DSH_EOF_13'
-base_tag=dsh-v0.2.1-rc.2
-base_commit=687f282e8625c6b8d11ff58211a90524be2e4317
-generated=2026-10-24T03:05:45+08:00
-repo=/data/data/com.termux/files/home/deepseek-harness
+base_tag=dsh-v0.2.2-alpha.2
+base_commit=f3803c96974ad4a94195fb97e5c637e9c2a3afe3
+generated=2026-10-29T01:42:58+08:00
+repo=/data/data/com.termux/files/usr/tmp/wt-022
 
-5c6ef68b66298b81c30242fee7a9f8c83c934ebe6695e7165a49da96b58efb49  01-plugin-manager-hang.patch  3 files
-95fdf7ef23357435a55b435035bab4c98aac9fe418a66df51ac563823ab03321  02-telemetry-rows.patch  4 files
-00ebcfbc1f9bec156cd57f7a8d86643fbc34811bfa8ab2d481e39dd48330eea8  03-termux-fs.patch  5 files
-b4c92f4b0594675103b7668aa82ab115a13035d8f20fc302227ade3aea2fb0e8  04-session-jsonl.patch  2 files
+24b51da2bec3e13f51141f42bada9aa969c8a254c12fef268e1f2bebdd78837a  01-plugin-manager-hang.patch  3 files
+de2306ddb8907ca51f942053bc3a9e9e6a1eb82a5a15b5a5796a5d41ced021b6  02-telemetry-rows.patch  4 files
+1683429d43ef44bd5ed69cd80e5419ca023619f9a6fa81ac668349dfc6e9b90e  03-termux-fs.patch  5 files
+e2fb1591095a10ba5bc268437e2906ff10f05daf293d0b8971625ccc456a686d  04-session-jsonl.patch  2 files
 c40e45997cfe800a9718bf1dcea4988fe9829da9af1b0d4da4d843286541fa61  05-native-android.patch  4 files
-8f09b82c0387dd0219d27c2d3617c8780833e3d1432c1483e25aca71144de5da  06-perf-misc.patch  4 files
-5867b666c20d35997b66aa8cbe27a98be35920c8f72e16a37652a113a496c50b  07-sharp-wasm32.patch  1 files
-4bd50118ac5f0f7e83bf9c67b6dbd3b38c816eaee034e6feb43cb2522a0691e9  08-lockfile.patch  1 files
+097d56a9b03d3955c9c88f5d2ea777fe95186c83407ab9a975936d27bc0afd15  06-perf-misc.patch  4 files
+a22918eeb64fd8eb8724863e2e2e060d5aa4fd8f859ac05ed1e7597df43fc2cf  07-sharp-wasm32.patch  1 files
+5d86e07ec836aca86efdb5c1c64280d4bf50ab16cca34f718c3dc3382c0f3581  08-lockfile.patch  1 files
 c6e46f1805dba2e53ccd647f053132096f36e713b10bf9767b86178ac4874af1  09-web-worker-context.patch  1 files
-b4693eafb60b17dce39d171568b09a7a201ce664effd0e73bdcf48561ec1a4c5  10-config-editor-composition.patch  2 files
+f1cc46d4ef32946e49ab1d6c321bf31efa9630213167764af73913217e955d53  10-config-editor-composition.patch  2 files
 DSH_EOF_13
 cat > "$TMP/patches/addon/node-addon-require-builtin.patch" <<'DSH_EOF_14'
 diff --git a/packages/native/src/runtime_context/platform.cc b/packages/native/src/runtime_context/platform.cc

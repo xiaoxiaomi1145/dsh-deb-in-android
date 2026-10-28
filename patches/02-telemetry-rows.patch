@@ -41,7 +41,7 @@ index 0397ffaf35..43c89c5e18 100644
    })
  })
 diff --git a/packages/boot/app-boot/src/index.ts b/packages/boot/app-boot/src/index.ts
-index fded02c9c8..fddbd4d1a7 100644
+index acab24ebe4..adce4a9457 100644
 --- a/packages/boot/app-boot/src/index.ts
 +++ b/packages/boot/app-boot/src/index.ts
 @@ -7,7 +7,8 @@
@@ -52,9 +52,9 @@ index fded02c9c8..fddbd4d1a7 100644
 +import { existsSync, readFileSync } from 'node:fs'
 +import { tmpdir } from 'node:os'
  import { inspect, parseEnv } from 'node:util'
- import { basename, dirname, isAbsolute, resolve } from 'node:path'
- import * as yaml from 'js-yaml'
-@@ -17,7 +18,7 @@ import Include, { applyEntryPatches, entryListSchema, type PatchOptions } from '
+ import { captureStartupComposition, type StartupCompositionDiagnostic } from './startup-diagnostics.ts'
+ export type { StartupCompositionDiagnostic, StartupPluginState, StartupServiceState } from './startup-diagnostics.ts'
+@@ -19,7 +20,7 @@ import Include, { applyEntryPatches, entryListSchema, type PatchOptions } from '
  import Group from '@deepseek-ai/cordis-plugin-group'
  import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
  import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
@@ -63,7 +63,7 @@ index fded02c9c8..fddbd4d1a7 100644
  export { sanitizeProfile } from './profile-sanitize.ts'
  export { getDshRuntimeVersion, evaluatePluginCompatibility, pluginCompatibilityWarning, type PluginCompatibility } from './plugin-compatibility.ts'
  export {
-@@ -224,6 +225,27 @@ function readEnvLayer(
+@@ -222,6 +223,27 @@ function readEnvLayer(
    return { path, values }
  }
  
@@ -91,7 +91,7 @@ index fded02c9c8..fddbd4d1a7 100644
  /**
   * Load the product CLI's inherited > invoking-directory `.env` > Harness-home
   * `.env` snapshot. The Harness home resolves before either file; both files
-@@ -251,6 +273,10 @@ export function loadLayeredEnv(
+@@ -249,6 +271,10 @@ export function loadLayeredEnv(
        if (process.env[name] === undefined) process.env[name] = value
      }
    }
@@ -154,7 +154,7 @@ index e2ebfad5ce..5f737d8c13 100644
    return patches
  }
 diff --git a/packages/boot/app-boot/tests/app-boot.spec.ts b/packages/boot/app-boot/tests/app-boot.spec.ts
-index 5e83da0b17..e075665ea3 100644
+index 48f2e4456c..a7c2ead746 100644
 --- a/packages/boot/app-boot/tests/app-boot.spec.ts
 +++ b/packages/boot/app-boot/tests/app-boot.spec.ts
 @@ -7,7 +7,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'

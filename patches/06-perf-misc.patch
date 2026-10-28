@@ -1,5 +1,5 @@
 diff --git a/packages/attachment/attachment-local/src/store.ts b/packages/attachment/attachment-local/src/store.ts
-index 7fab679e34..431423e6a4 100644
+index 88ab2c9d27..3b3cd0097b 100644
 --- a/packages/attachment/attachment-local/src/store.ts
 +++ b/packages/attachment/attachment-local/src/store.ts
 @@ -2,7 +2,7 @@

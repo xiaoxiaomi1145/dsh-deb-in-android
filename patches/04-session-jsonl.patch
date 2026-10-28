@@ -36,7 +36,7 @@ index ff01e9a038..95a358bb8e 100644
      /* v8 ignore else -- a non-collision filesystem error propagates unchanged. */
      if (isEEXIST(error)) return false
 diff --git a/packages/session/session-persistence-jsonl/src/index.ts b/packages/session/session-persistence-jsonl/src/index.ts
-index 3c3c13589f..f2eaad1621 100644
+index f8351fa9ee..c3c68c942f 100644
 --- a/packages/session/session-persistence-jsonl/src/index.ts
 +++ b/packages/session/session-persistence-jsonl/src/index.ts
 @@ -14,7 +14,7 @@ import {
@@ -48,7 +48,7 @@ index 3c3c13589f..f2eaad1621 100644
  import { dirname, join, resolve } from 'node:path'
  import { performance } from 'node:perf_hooks'
  import { scheduler } from 'node:timers/promises'
-@@ -1294,30 +1294,31 @@ class JsonlSessionPersistence extends SessionPersistence {
+@@ -1296,30 +1296,31 @@ class JsonlSessionPersistence extends SessionPersistence {
      await this.syncDirPosix(project)
      await this.rejectExistingLog(finalPath, id)
      const tmp = await this.writeSyncedTempFile(finalPath, content)

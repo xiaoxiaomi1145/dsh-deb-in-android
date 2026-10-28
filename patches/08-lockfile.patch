@@ -1,8 +1,8 @@
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
-index 5f38bae356..64cad94f66 100644
+index 3bb5b2fd3e..f931aded9e 100644
 --- a/pnpm-lock.yaml
 +++ b/pnpm-lock.yaml
-@@ -22,6 +22,10 @@ patchedDependencies:
+@@ -26,6 +26,10 @@ patchedDependencies:
  importers:
  
    .:
@@ -11,9 +11,9 @@ index 5f38bae356..64cad94f66 100644
 +        specifier: ^0.35.5
 +        version: 0.35.5
      devDependencies:
-       '@deepseek-ai/dsh-agent':
+       '@deepseek-ai/dsh-action-cards':
          specifier: workspace:*
-@@ -24488,7 +24492,6 @@ snapshots:
+@@ -26924,7 +26928,6 @@ snapshots:
    '@emnapi/runtime@1.11.3':
      dependencies:
        tslib: 2.8.1
@@ -21,7 +21,7 @@ index 5f38bae356..64cad94f66 100644
  
    '@emnapi/wasi-threads@1.2.1':
      dependencies:
-@@ -25020,7 +25023,6 @@ snapshots:
+@@ -27456,7 +27459,6 @@ snapshots:
    '@img/sharp-wasm32@0.35.5':
      dependencies:
        '@emnapi/runtime': 1.11.3

@@ -1,5 +1,5 @@
 diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
-index a9d97fd6ac..1b0301a291 100644
+index 0cc11fa03b..bcf84dd99f 100644
 --- a/packages/fs/fs-local/src/fsio.ts
 +++ b/packages/fs/fs-local/src/fsio.ts
 @@ -6,8 +6,8 @@
@@ -13,7 +13,7 @@ index a9d97fd6ac..1b0301a291 100644
  import type { BigIntStats, Dirent, Stats } from 'node:fs'
  import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
  import { TextDecoder, promisify } from 'node:util'
-@@ -27,6 +27,18 @@ function isEEXIST(error: unknown): boolean {
+@@ -28,6 +28,18 @@ function isEEXIST(error: unknown): boolean {
    return error instanceof Error && 'code' in error && error.code === 'EEXIST'
  }
  
@@ -32,7 +32,7 @@ index a9d97fd6ac..1b0301a291 100644
  /**
   * A path component that is expected to be a directory is a regular file (e.g.
   * resolving `afile/child.txt` when `afile` is a file). Like `ENOENT`, the target
-@@ -93,6 +105,8 @@ export interface FsIoInternals {
+@@ -94,6 +106,8 @@ export interface FsIoInternals {
    replaceFile?: (replaced: string, replacement: string) => Promise<void>
    /** Override the hard-link no-replace publication boundary. */
    linkFile?: (existingPath: string, newPath: string) => Promise<void>
@@ -41,7 +41,7 @@ index a9d97fd6ac..1b0301a291 100644
    /** Override target inspection after guarded publication fails. */
    inspectPublicationTarget?: (path: string) => Promise<BigIntStats>
    /** Override staging-directory removal for commit-point failure coverage. */
-@@ -570,6 +584,50 @@ async function throwGuardedCreateFailure(
+@@ -584,6 +598,50 @@ async function throwGuardedCreateFailure(
    throw new FsError(`cannot write "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
  }
  
@@ -92,7 +92,7 @@ index a9d97fd6ac..1b0301a291 100644
  /**
   * Atomically replace a file through a private, synced staging file in the same directory.
   * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
-@@ -606,6 +664,8 @@ export async function writeFileAtomic(
+@@ -620,6 +678,8 @@ export async function writeFileAtomic(
    const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
    const replaceFile = internals.replaceFile ?? replaceFileWin32
    const linkFile = internals.linkFile ?? link
@@ -101,7 +101,7 @@ index a9d97fd6ac..1b0301a291 100644
    const inspectPublicationTarget = internals.inspectPublicationTarget
      ?? (path => lstat(path, { bigint: true }))
    const removeStagingDir = internals.removeStagingDir
-@@ -631,11 +691,14 @@ export async function writeFileAtomic(
+@@ -645,11 +705,14 @@ export async function writeFileAtomic(
  
      throwIfAborted(signal, 'write')
      if (createIfAbsent !== undefined) {
@@ -395,10 +395,10 @@ index 7369ef521c..96f08ee8d1 100644
 +  })
  })
 diff --git a/packages/fs/tool-fs-search/tests/tools.spec.ts b/packages/fs/tool-fs-search/tests/tools.spec.ts
-index c261d139a6..dcc2adf909 100644
+index 5763aacc15..22f0269efc 100644
 --- a/packages/fs/tool-fs-search/tests/tools.spec.ts
 +++ b/packages/fs/tool-fs-search/tests/tools.spec.ts
-@@ -22,7 +22,6 @@ import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH, type ToolExecution, type Too
+@@ -24,7 +24,6 @@ import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH, type ToolExecution, type Too
  import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
  import type { SubprocessCollectedOutputs, SubprocessHandle, SubprocessOutcome, SubprocessOutputRead, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
  import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
@@ -406,7 +406,7 @@ index c261d139a6..dcc2adf909 100644
  import { SpillLocator, SpillStore } from '@deepseek-ai/dsh-spill'
  import type { SaveTextSpill, SpillRef } from '@deepseek-ai/dsh-spill'
  import * as ToolFsSearch from '@deepseek-ai/dsh-tool-fs-search'
-@@ -414,7 +413,7 @@ describe('workdir derivation and signal forwarding', () => {
+@@ -420,7 +419,7 @@ describe('workdir derivation and signal forwarding', () => {
      const spec = subprocess.spawns[0]
      // --no-config keeps a host RIPGREP_CONFIG_PATH from injecting a
      // preprocessor into this unconfined spawn.
@@ -415,7 +415,7 @@ index c261d139a6..dcc2adf909 100644
      expect(spec?.stdio.stdin).toBe('ignore')
      // stdout gets the tool's parse budget; stderr is a diagnostic excerpt;
      // both are the seam's diagnostic-tail shape (no spill files requested).
-@@ -531,13 +530,14 @@ describe('workdir derivation and signal forwarding', () => {
+@@ -537,13 +536,14 @@ describe('workdir derivation and signal forwarding', () => {
      expect(text(result)).toContain('aborted before completion')
    })
  
@@ -434,7 +434,7 @@ index c261d139a6..dcc2adf909 100644
      expect(resolveRgPath()).toBe(resolveRgPath())
    })
  
-@@ -757,7 +757,7 @@ describe('glob results', () => {
+@@ -763,7 +763,7 @@ describe('glob results', () => {
      subprocess.handler = () => runResult('sub/a.ts\n')
      const result = await call(ctx, 'glob', { pattern: '*.ts', path: 'sub' })
      expect(result.isError).toBe(false)
