@@ -1,0 +1,1988 @@
+diff --git a/packages/bundle/web-app/cordis.patch.yml b/packages/bundle/web-app/cordis.patch.yml
+index 254db4f189..7b690bffde 100644
+--- a/packages/bundle/web-app/cordis.patch.yml
++++ b/packages/bundle/web-app/cordis.patch.yml
+@@ -329,6 +329,9 @@
+     - id: ui-approval
+       name: '@deepseek-ai/dsh-client-ui-approval'
+ 
++    - id: message-quotes
++      name: '@deepseek-ai/dsh-message-quotes'
++
+     - id: ui-chat
+       name: '@deepseek-ai/dsh-client-ui-chat'
+ 
+diff --git a/packages/bundle/web-app/package.json b/packages/bundle/web-app/package.json
+index 1a7ff84d0d..68beb30a6a 100644
+--- a/packages/bundle/web-app/package.json
++++ b/packages/bundle/web-app/package.json
+@@ -142,6 +142,7 @@
+     "@deepseek-ai/dsh-host-webserver": "workspace:*",
+     "@deepseek-ai/dsh-launch-environment": "workspace:*",
+     "@deepseek-ai/dsh-message-feedback": "workspace:*",
++    "@deepseek-ai/dsh-message-quotes": "workspace:*",
+     "@deepseek-ai/dsh-office-to-pdf": "workspace:*",
+     "@deepseek-ai/dsh-persona": "workspace:*",
+     "@deepseek-ai/dsh-plan-mode": "workspace:*",
+diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
+index 8aa63aa1f7..c368b6bf32 100644
+--- a/packages/client/ui-chat/src/client/apply.ts
++++ b/packages/client/ui-chat/src/client/apply.ts
+@@ -202,7 +202,7 @@ export function apply(ctx: Context): void {
+     const chat = chatSource(binding)
+     const conversation = ctx.uiConversation.binding(binding)
+     return {
+-      hooks: { presentation },
++      hooks: { presentation, interactionIds: ctx.uiConversation.interactions },
+       keyedHooks: {
+         chatNode: key => chat.getSnapshot().nodes.source(key),
+         chatNodeBottom: key => chat.getSnapshot().nodes.bottomSource(key),
+@@ -233,6 +233,7 @@ export function apply(ctx: Context): void {
+       locale: NS,
+       children: {
+         'conversation.chat.flow': { kind: 'single', scope: 'session', inject: CHAT_FLOW_INJECT },
++        'conversation.chat.text-interaction': { kind: 'keyed', scope: 'session' },
+       },
+       store: chatStore,
+       inject: (sessionId: SessionId): ChatViewInjected => {
+@@ -242,6 +243,7 @@ export function apply(ctx: Context): void {
+         const chat = chatSource(binding)
+         return {
+           ...nodeSources(binding),
++          dispatchInteraction: gesture => ctx.uiConversation.interactions.dispatch(sessionId, gesture),
+           fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
+           // Files open in the right Sidebar, not in a desktop application: the
+           // content stays in the product, beside the conversation that produced
+diff --git a/packages/client/ui-chat/src/client/chat/ChatView.module.css b/packages/client/ui-chat/src/client/chat/ChatView.module.css
+index 6696330f0a..19a3cef259 100644
+--- a/packages/client/ui-chat/src/client/chat/ChatView.module.css
++++ b/packages/client/ui-chat/src/client/chat/ChatView.module.css
+@@ -302,3 +302,12 @@
+ .modalAction {
+   min-width: 72px;
+ }
++
++.column > .textInteraction {
++  position: absolute;
++  /* Remain below the sticky composer while scroll placement catches up. */
++  z-index: 6;
++  visibility: hidden;
++  margin: 0;
++  width: max-content;
++}
+diff --git a/packages/client/ui-chat/src/client/chat/ChatView.tsx b/packages/client/ui-chat/src/client/chat/ChatView.tsx
+index 1e0741f31f..f347a991d9 100644
+--- a/packages/client/ui-chat/src/client/chat/ChatView.tsx
++++ b/packages/client/ui-chat/src/client/chat/ChatView.tsx
+@@ -16,6 +16,7 @@ import type { ChatSnapshot } from '../contract/snapshot.ts'
+ import { TurnNavigator } from './TurnNavigator.tsx'
+ import { mergeTurnRailItems } from './turn-rail-items.ts'
+ import { useChatScroll } from './use-chat-scroll.ts'
++import { useTextInteraction } from './text-interaction.ts'
+ import { fileMediaUrl, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
+ import css from './ChatView.module.css'
+ 
+@@ -60,8 +61,9 @@ const MOTION_TAIL_MS = 800
+ export function ChatView({
+   useSession, useChat, useConversation, useSessions, renderSlot,
+   sessionId, openFile, openExternalLink, loadOlder, loadThrough, loadImage, inspectCall, chatScroll, forkAt, fileMentions,
+-  usePresentation, useProjection, t,
++  usePresentation, useProjection, useInteractionIds, dispatchInteraction, t,
+ }: ChatViewSlotProps) {
++  const interactionSurfaceRef = useRef<HTMLDivElement>(null)
+   const order = useChat(s => s.order)
+   const groupedEntries = useConversation(snapshot => snapshot.views.grouped('chat')?.entries)
+   const entries = useMemo<readonly RenderEntry[]>(() => groupedEntries
+@@ -192,6 +194,8 @@ export function ChatView({
+     loadedTurns: turnNavigationItems,
+     transcriptView,
+   })
++  const interactionIds = useInteractionIds(ids => ids)
++  const textInteraction = useTextInteraction(scroll.columnRef, interactionSurfaceRef, dispatchInteraction, interactionIds)
+   const flowContext = useMemo<ChatFlowHookContext>(() => ({ motion: scroll.motion }), [scroll.motion])
+ 
+   return (
+@@ -228,6 +232,13 @@ export function ChatView({
+                 entries, pendingInputs, lastInputTurn, deferCollapse,
+                 cwd, openFile: requestOpenFile, inspectCall, forkAt, loadImage, fileMentions,
+               }, { hookContext: flowContext })}
++            <div ref={interactionSurfaceRef} className={css.textInteraction} data-text-interaction-surface=""
++              aria-hidden={textInteraction.active === null}>
++              {textInteraction.active !== null && renderSlot('conversation.chat.text-interaction', {
++                trigger: textInteraction.active.trigger, readText: textInteraction.readText,
++                dismiss: textInteraction.dismiss, clearSelection: textInteraction.clearSelection,
++              }, { entryKey: textInteraction.active.id })}
++            </div>
+             </MarkdownDelegateProvider>
+             {/* No pending placeholders: questions (ui-user-questions) and approvals
+                 (ApprovalPanel) both take over the composer, so a flow card would
+diff --git a/packages/client/ui-chat/src/client/chat/UserContent.tsx b/packages/client/ui-chat/src/client/chat/UserContent.tsx
+index 64024a096c..475d1d622d 100644
+--- a/packages/client/ui-chat/src/client/chat/UserContent.tsx
++++ b/packages/client/ui-chat/src/client/chat/UserContent.tsx
+@@ -44,7 +44,7 @@ FactoryComponentPropsOf<'conversation.chat.user.content'>) {
+             ))}
+         </div>
+       )}
+-      {showBubble && <div className={css.bubble}>
++      {showBubble && <div className={css.bubble} data-text-interaction-source="">
+         {renderFactorySlot('conversation.user.text', { text, facts, interactive, ellipsis })}
+         {extraBlocks.map((block, index) => (
+           <JsonBlock key={index} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />
+diff --git a/packages/client/ui-chat/src/client/chat/text-interaction.ts b/packages/client/ui-chat/src/client/chat/text-interaction.ts
+new file mode 100644
+index 0000000000..f497b66952
+--- /dev/null
++++ b/packages/client/ui-chat/src/client/chat/text-interaction.ts
+@@ -0,0 +1,298 @@
++/** Area-local text gestures, action ownership, dismissal, and content-relative placement. */
++import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
++import type { RefObject } from 'react'
++import { readTextSelection, selectedText } from './text-selection.ts'
++import type { TextSelection } from './text-selection.ts'
++
++import type {
++  TextInteractionGesture, TextInteractionSurface, TextInteractionTrigger,
++} from '@deepseek-ai/dsh-client-ui-conversation/client'
++
++/** Current area-owned surface and its actions. */
++export interface TextInteractionBinding extends Omit<TextInteractionSurface, 'trigger'> {
++  readonly active: { readonly id: string; readonly trigger: TextInteractionTrigger } | null
++}
++
++interface Target {
++  readonly source: HTMLElement
++  readonly selection: TextSelection | null
++  readonly text: string | null
++  readonly point: { readonly x: number; readonly y: number } | null
++}
++
++interface Bounds { left: number; top: number; right: number; bottom: number }
++
++function rectBounds(rect: DOMRect): Bounds {
++  return { left: rect.left, top: rect.top, right: rect.left + rect.width, bottom: rect.top + rect.height }
++}
++
++function intersects(a: Bounds, b: Bounds): boolean {
++  return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom
++}
++
++function sameRange(a: Range | null, b: Range | null): boolean {
++  return a === b || (a !== null && b !== null && a.startContainer === b.startContainer
++    && a.startOffset === b.startOffset && a.endContainer === b.endContainer && a.endOffset === b.endOffset)
++}
++
++function available(root: HTMLElement, target: Target): boolean {
++  if (!root.isConnected || !root.contains(target.source) || !target.source.hasAttribute('data-text-interaction-source')) return false
++  const view = root.ownerDocument.defaultView
++  /* v8 ignore if -- Mounted browser content always has an owner window. */
++  if (view === null) return false
++  for (let node: HTMLElement | null = target.source; node !== null; node = node.parentElement) {
++    const style = view.getComputedStyle(node)
++    if (node.hidden || node.inert || node.hasAttribute('data-text-interaction-exclude')
++      || style.display === 'none' || style.visibility === 'hidden') return false
++  }
++  return target.selection === null || (target.source.contains(target.selection.range.startContainer)
++    && target.source.contains(target.selection.range.endContainer) && selectedText(target.selection) === target.text)
++}
++
++function composerSeat(root: HTMLElement): HTMLElement | null {
++  return root.closest('[data-conversation-scroll]')?.querySelector<HTMLElement>('[data-composer-seat]') ?? null
++}
++
++function visibleBounds(root: HTMLElement, source: HTMLElement, view: Window): Bounds {
++  const rootRect = rectBounds(root.getBoundingClientRect())
++  const bounds: Bounds = {
++    left: Math.max(0, rootRect.left), right: Math.min(view.innerWidth, rootRect.right), top: 0, bottom: view.innerHeight,
++  }
++  for (let node: HTMLElement | null = source; node !== null; node = node.parentElement) {
++    const style = view.getComputedStyle(node)
++    const rect = rectBounds(node.getBoundingClientRect())
++    if (/(auto|scroll|hidden|clip)/u.test(style.overflowX)) {
++      bounds.left = Math.max(bounds.left, rect.left)
++      bounds.right = Math.min(bounds.right, rect.right)
++    }
++    if (/(auto|scroll|hidden|clip)/u.test(style.overflowY)) {
++      bounds.top = Math.max(bounds.top, rect.top)
++      bounds.bottom = Math.min(bounds.bottom, rect.bottom)
++    }
++  }
++  const composer = composerSeat(root)?.getBoundingClientRect()
++  if (composer !== undefined && composer.height > 0
++    && composer.right > bounds.left && composer.left < bounds.right) {
++    bounds.bottom = Math.min(bounds.bottom, composer.top)
++  }
++  return bounds
++}
++
++/**
++ * Own text interactions for one positioned content area and its local surface.
++ * @param rootRef - existing content element with position: relative.
++ * @param surfaceRef - absolute surface inside that element; only the selected Slot consumer is mounted.
++ * @param dispatchInteraction - framework-injected plugin gesture dispatch.
++ * @param registeredIds - live registered owners used to dismiss removed plugins.
++ * @returns current owner and area-local selection actions.
++ */
++export function useTextInteraction(
++  rootRef: RefObject<HTMLElement>, surfaceRef: RefObject<HTMLElement>,
++  dispatchInteraction: (gesture: TextInteractionGesture) => string | null,
++  registeredIds: readonly string[],
++): TextInteractionBinding {
++  const target = useRef<Target | null>(null)
++  const [active, setActive] = useState<TextInteractionBinding['active']>(null)
++  const dismiss = useCallback(() => {
++    target.current = null
++    if (surfaceRef.current !== null) surfaceRef.current.style.visibility = 'hidden'
++    setActive(null)
++  }, [surfaceRef])
++  useEffect(dismiss, [registeredIds, dispatchInteraction, dismiss])
++  const readText = useCallback(() => {
++    const root = rootRef.current
++    const current = target.current
++    if (root === null || current === null || !available(root, current)) return null
++    return current.selection === null ? null : selectedText(current.selection)
++  }, [rootRef])
++  const clearSelection = useCallback(() => { rootRef.current?.ownerDocument.getSelection()?.removeAllRanges() }, [rootRef])
++
++  const place = useCallback(() => {
++    const root = rootRef.current
++    const surface = surfaceRef.current
++    const current = target.current
++    if (root === null || surface === null || current === null) return
++    if (!available(root, current)) { dismiss(); return }
++    const view = root.ownerDocument.defaultView
++    /* v8 ignore if -- Mounted browser content always has an owner window. */
++    if (view === null) return
++    const visible = visibleBounds(root, current.source, view)
++    const selectionRects = current.selection === null ? [] : [...current.selection.range.getClientRects()]
++    const fallback = current.selection?.range.getBoundingClientRect() ?? current.source.getBoundingClientRect()
++    const rects = selectionRects.length === 0 ? [fallback] : selectionRects
++    const sourceRect = current.source.getBoundingClientRect()
++    const pointX = current.point === null ? 0 : sourceRect.left + current.point.x - current.source.scrollLeft
++    const pointY = current.point === null ? 0 : sourceRect.top + current.point.y - current.source.scrollTop
++    const anchor = current.point === null
++      ? rects.map(rectBounds).find(rect => intersects(rect, visible))
++      : { left: pointX, right: pointX + 1, top: pointY, bottom: pointY + 1 }
++    if (anchor === undefined || !intersects(anchor, visible) || visible.right <= visible.left || visible.bottom <= visible.top) {
++      surface.style.visibility = 'hidden'
++      return
++    }
++    const gap = 8
++    surface.style.maxWidth = `${visible.right - visible.left}px`
++    surface.style.maxHeight = `${visible.bottom - visible.top}px`
++    const size = surface.getBoundingClientRect()
++    const x = current.point === null
++      ? (Math.max(anchor.left, visible.left) + Math.min(anchor.right, visible.right) - size.width) / 2
++      : anchor.left
++    const above = anchor.top - gap - size.height
++    const below = anchor.bottom + gap
++    const preferredY = current.point === null && above >= visible.top ? above : below
++    const left = Math.max(visible.left, Math.min(x, visible.right - size.width))
++    const top = Math.max(visible.top, Math.min(preferredY, visible.bottom - size.height))
++    const rootRect = root.getBoundingClientRect()
++    const scaleX = root.offsetWidth === 0 ? 1 : rootRect.width / root.offsetWidth
++    const scaleY = root.offsetHeight === 0 ? 1 : rootRect.height / root.offsetHeight
++    surface.style.left = `${(left - rootRect.left) / scaleX - root.clientLeft + root.scrollLeft}px`
++    surface.style.top = `${(top - rootRect.top) / scaleY - root.clientTop + root.scrollTop}px`
++    surface.style.visibility = 'visible'
++  }, [dismiss, rootRef, surfaceRef])
++
++  // The surface's measured dimensions are needed after its Slot owner renders, before paint.
++  useLayoutEffect(place, [active, place])
++  useEffect(() => {
++    const root = rootRef.current
++    const surface = surfaceRef.current
++    if (root === null || surface === null) return
++    const document = root.ownerDocument
++    const view = document.defaultView
++    /* v8 ignore if -- Mounted browser content always has an owner window. */
++    if (view === null) return
++    let pointerSelecting = false
++    let keyboardSelecting = false
++    let selectionChangedDuringGesture = false
++    let previousRange: Range | null = null
++    let frame: number | undefined
++    const schedulePlacement = (): void => {
++      if (target.current === null || frame !== undefined) return
++      frame = view.requestAnimationFrame(() => { frame = undefined; place() })
++    }
++    const dispatch = (trigger: TextInteractionTrigger, next: Target, event: Event): void => {
++      if (!available(root, next)) return
++      const id = dispatchInteraction({
++        trigger, hasSelection: next.selection !== null,
++        readText: () => next.text,
++        preventDefault: () => { event.preventDefault() },
++      })
++      if (id === null) return
++      target.current = next
++      setActive({ id, trigger })
++    }
++    const updateSelection = (event: Event): void => {
++      if (pointerSelecting || keyboardSelecting) { selectionChangedDuringGesture = true; return }
++      if (target.current !== null && target.current.point !== null) return
++      if (target.current !== null && surface.contains(document.activeElement)) return
++      const selection = readTextSelection(root, document.getSelection())
++      const range = selection?.range ?? null
++      if (!selectionChangedDuringGesture && sameRange(previousRange, range)) return
++      selectionChangedDuringGesture = false
++      previousRange = range?.cloneRange() ?? null
++      dismiss()
++      if (selection === null) return
++      const text = selectedText(selection)
++      if (text === null) return
++      dispatch('selection', { source: selection.source, selection: { ...selection, range: selection.range.cloneRange() }, text, point: null }, event)
++    }
++    const insideSurface = (event: Event): boolean => event.composedPath().includes(surface)
++    const pointerDown = (event: PointerEvent): void => {
++      if (insideSurface(event)) return
++      const selection = document.getSelection()
++      previousRange = selection?.rangeCount === 1 ? selection.getRangeAt(0).cloneRange() : null
++      dismiss()
++      selectionChangedDuringGesture = false
++      pointerSelecting = event.button === 0 && event.target instanceof Node && root.contains(event.target)
++    }
++    const pointerUp = (event: PointerEvent): void => {
++      if (!pointerSelecting) return
++      pointerSelecting = false
++      updateSelection(event)
++    }
++    const cancel = (): void => { pointerSelecting = false; keyboardSelecting = false; dismiss() }
++    const keyDown = (event: KeyboardEvent): void => {
++      if (event.key === 'Escape') { cancel(); return }
++      if (insideSurface(event) || !(event.target instanceof Node) || !root.contains(event.target)) return
++      if (event.key === 'Shift' || event.shiftKey) { keyboardSelecting = true; dismiss() }
++    }
++    const keyUp = (event: KeyboardEvent): void => {
++      if (!keyboardSelecting || (event.key !== 'Shift' && event.shiftKey)) return
++      keyboardSelecting = false
++      updateSelection(event)
++    }
++    const contextMenu = (event: MouseEvent): void => {
++      if (insideSurface(event)) return
++      const element = event.target instanceof Element ? event.target : null
++      const source = element?.closest<HTMLElement>('[data-text-interaction-source]')
++      if (source === undefined || source === null || !root.contains(source)
++        || element?.closest('[data-text-interaction-exclude], button, input, textarea, [contenteditable="true"]')) return
++      pointerSelecting = false
++      dismiss()
++      const selected = readTextSelection(root, document.getSelection())
++      const keyboard = event.clientX === 0 && event.clientY === 0
++      const inSelection = selected?.source === source && (keyboard || [...selected.range.getClientRects()].some(rect =>
++        event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom))
++      const selection = inSelection ? selected : null
++      const bounds = source.getBoundingClientRect()
++      dispatch('contextmenu', {
++        source, selection: selection === null ? null : { ...selection, range: selection.range.cloneRange() },
++        text: selection === null ? null : selectedText(selection),
++        point: {
++          x: (keyboard ? 0 : event.clientX - bounds.left) + source.scrollLeft,
++          y: (keyboard ? 0 : event.clientY - bounds.top) + source.scrollTop,
++        },
++      }, event)
++    }
++    document.addEventListener('selectionchange', updateSelection)
++    document.addEventListener('pointerdown', pointerDown, true)
++    document.addEventListener('pointerup', pointerUp)
++    document.addEventListener('pointercancel', cancel)
++    document.addEventListener('keydown', keyDown)
++    document.addEventListener('keyup', keyUp)
++    document.addEventListener('scroll', schedulePlacement, true)
++    root.addEventListener('contextmenu', contextMenu)
++    view.addEventListener('resize', schedulePlacement)
++    view.addEventListener('blur', cancel)
++    return () => {
++      document.removeEventListener('selectionchange', updateSelection)
++      document.removeEventListener('pointerdown', pointerDown, true)
++      document.removeEventListener('pointerup', pointerUp)
++      document.removeEventListener('pointercancel', cancel)
++      document.removeEventListener('keydown', keyDown)
++      document.removeEventListener('keyup', keyUp)
++      document.removeEventListener('scroll', schedulePlacement, true)
++      root.removeEventListener('contextmenu', contextMenu)
++      view.removeEventListener('resize', schedulePlacement)
++      view.removeEventListener('blur', cancel)
++      if (frame !== undefined) view.cancelAnimationFrame(frame)
++    }
++  }, [dismiss, place, rootRef, surfaceRef, dispatchInteraction])
++  useEffect(() => {
++    const root = rootRef.current
++    const surface = surfaceRef.current
++    if (active === null || root === null || surface === null) return
++    const view = root.ownerDocument.defaultView
++    /* v8 ignore if -- Mounted browser content always has an owner window. */
++    if (view === null) return
++    let frame: number | undefined
++    const schedule = (): void => {
++      if (frame !== undefined) return
++      frame = view.requestAnimationFrame(() => { frame = undefined; place() })
++    }
++    const resize = new ResizeObserver(schedule)
++    resize.observe(root)
++    resize.observe(surface)
++    const composer = composerSeat(root)
++    if (composer !== null) resize.observe(composer)
++    const mutations = new MutationObserver((records) => {
++      if (records.some(record => !surface.contains(record.target))) schedule()
++    })
++    mutations.observe(root, { childList: true, subtree: true, characterData: true, attributes: true })
++    return () => {
++      resize.disconnect()
++      mutations.disconnect()
++      if (frame !== undefined) view.cancelAnimationFrame(frame)
++    }
++  }, [active, place, rootRef, surfaceRef])
++  return { active, dismiss, readText, clearSelection }
++}
+diff --git a/packages/client/ui-chat/src/client/chat/text-selection.ts b/packages/client/ui-chat/src/client/chat/text-selection.ts
+new file mode 100644
+index 0000000000..bc3ae4dec0
+--- /dev/null
++++ b/packages/client/ui-chat/src/client/chat/text-selection.ts
+@@ -0,0 +1,180 @@
++/** DOM selection validation and visible-text projection, independent of business actions. */
++
++const PROJECTED_BLOCK_TAGS = new Set([
++  'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DIV', 'DL', 'DT', 'FIGCAPTION',
++  'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'LI', 'MAIN',
++  'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE', 'TBODY', 'TFOOT', 'THEAD', 'TR', 'UL',
++])
++const PROJECTED_CELL_TAGS = new Set(['TD', 'TH'])
++
++function excluded(element: Element): boolean {
++  if (element.matches('.katex-mathml, [data-text-interaction-exclude], [hidden], .sr-only')) return true
++  if (element.matches('[aria-hidden="true"]') && !element.matches('.katex-html')) return true
++  return element.tagName === 'BUTTON' && element.parentElement?.tagName !== 'CODE'
++}
++
++function projectedBoundary(node: Node): '\n' | '\t' | '' {
++  if (!(node instanceof Element)) return ''
++  if (PROJECTED_CELL_TAGS.has(node.tagName)) return '\t'
++  return PROJECTED_BLOCK_TAGS.has(node.tagName) ? '\n' : ''
++}
++
++function projectedSeparator(previous: Node, current: Node): '\n' | '\t' | '' {
++  const left = projectedBoundary(previous)
++  const right = projectedBoundary(current)
++  if (left === '\n' || right === '\n') return '\n'
++  return left === '\t' || right === '\t' ? '\t' : ''
++}
++
++interface ProjectedText {
++  readonly text: string
++  readonly offsets: readonly number[]
++}
++
++function projectedText(node: Text): ProjectedText {
++  const source = node.data
++  const parent = node.parentElement
++  const view = node.ownerDocument.defaultView
++  const whiteSpace = parent === null || view === null ? '' : view.getComputedStyle(parent).whiteSpace
++  const preservesBreaks = whiteSpace === 'pre' || whiteSpace === 'pre-wrap'
++    || whiteSpace === 'pre-line' || whiteSpace === 'break-spaces'
++  const offsets = new Array<number>(source.length + 1).fill(0)
++  const structuralWhitespace = !preservesBreaks
++    && /^[\t\n\f\r ]*$/u.test(source)
++    && [node.previousSibling, node.nextSibling].some(
++      sibling => sibling !== null && projectedBoundary(sibling) !== '',
++    )
++  if (structuralWhitespace) return { text: '', offsets }
++  let text = ''
++  let cursor = 0
++  if (!preservesBreaks && node.previousSibling instanceof HTMLElement
++    && node.previousSibling.tagName === 'BR' && source.startsWith('\n')) {
++    cursor = 1
++  }
++  while (cursor < source.length) {
++    const softBreak = preservesBreaks ? null : /^[ \t]*[\r\n]+[ \t]*/u.exec(source.slice(cursor))
++    if (softBreak !== null) {
++      const end = cursor + softBreak[0].length
++      for (let index = cursor; index < end; index++) offsets[index] = text.length
++      text += ' '
++      offsets[end] = text.length
++      cursor = end
++      continue
++    }
++    offsets[cursor] = text.length
++    text += source.charAt(cursor)
++    cursor += 1
++    offsets[cursor] = text.length
++  }
++  return { text, offsets }
++}
++
++interface ProjectedTextSpan {
++  readonly node: Text
++  readonly start: number
++  readonly offsets: readonly number[]
++}
++
++interface ProjectedFragment {
++  readonly text: string
++  readonly spans: readonly ProjectedTextSpan[]
++  readonly boundaries: readonly (readonly [Node, readonly number[]])[]
++}
++
++function projectedFragment(node: Node): ProjectedFragment {
++  if (node.nodeType === Node.TEXT_NODE) {
++    const projected = projectedText(node as Text)
++    return {
++      text: projected.text,
++      spans: projected.offsets.length <= 1
++        ? []
++        : [{ node: node as Text, start: 0, offsets: projected.offsets }],
++      boundaries: [],
++    }
++  }
++  if (!(node instanceof Element)) {
++    return { text: '', spans: [], boundaries: [] }
++  }
++  if (excluded(node)) return { text: '', spans: [], boundaries: [] }
++  if (node.tagName === 'BR') return { text: '\n', spans: [], boundaries: [] }
++  let text = ''
++  let previous: Node | null = null
++  const spans: ProjectedTextSpan[] = []
++  const boundaries: Array<readonly [Node, readonly number[]]> = []
++  const offsets = new Array<number>(node.childNodes.length + 1).fill(0)
++  for (const [index, child] of [...node.childNodes].entries()) {
++    const fragment = projectedFragment(child)
++    if (fragment.text !== '' && previous !== null) {
++      const separator = projectedSeparator(previous, child)
++      const needsSeparator = separator === '\n'
++        ? !text.endsWith('\n') && !fragment.text.startsWith('\n')
++        : separator === '\t' && !/[\t\n]$/u.test(text) && !/^[\t\n]/u.test(fragment.text)
++      if (needsSeparator) text += separator
++    }
++    offsets[index] = text.length
++    const base = text.length
++    text += fragment.text
++    for (const span of fragment.spans) {
++      spans.push({ node: span.node, start: base + span.start, offsets: span.offsets })
++    }
++    for (const [owner, childOffsets] of fragment.boundaries) {
++      boundaries.push([owner, childOffsets.map(offset => base + offset)])
++    }
++    if (fragment.text !== '') previous = child
++    offsets[index + 1] = text.length
++  }
++  boundaries.push([node, offsets])
++  return { text, spans, boundaries }
++}
++
++function projectedOffset(
++  projection: ProjectedFragment,
++  container: Node,
++  offset: number,
++): number | null {
++  if (container.nodeType === Node.TEXT_NODE) {
++    const span = projection.spans.find(candidate => candidate.node === container)
++    const projected = span?.offsets[offset]
++    return span === undefined || projected === undefined ? null : span.start + projected
++  }
++  const boundaries = projection.boundaries.find(([owner]) => owner === container)?.[1]
++  return boundaries?.[offset] ?? null
++}
++
++/** One browser range contained by an enabled text source. */
++export interface TextSelection {
++  readonly source: HTMLElement
++  readonly range: Range
++}
++
++/**
++ * Find a single noncollapsed selection inside one enabled source.
++ * @param root - mounted interaction area.
++ * @param selection - browser selection in that area's document.
++ * @returns the selected source and range, or null across sources and excluded content.
++ */
++export function readTextSelection(root: HTMLElement, selection: Selection | null): TextSelection | null {
++  if (selection === null || selection.rangeCount !== 1 || selection.isCollapsed) return null
++  const range = selection.getRangeAt(0)
++  const sourceOf = (node: Node): HTMLElement | null =>
++    (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>('[data-text-interaction-source]') ?? null
++  const source = sourceOf(range.startContainer)
++  if (source === null || source !== sourceOf(range.endContainer) || !root.contains(source)
++    || source.closest('[hidden], [inert], [data-text-interaction-exclude]') !== null) return null
++  return { source, range }
++}
++
++/**
++ * Project selected DOM text with visible block boundaries and without renderer chrome.
++ * @param selection - range and its source, obtained through readTextSelection.
++ * @returns trimmed visible text; empty or excluded selections return null.
++ */
++export function selectedText(selection: TextSelection): string | null {
++  const { source, range } = selection
++  const projection = projectedFragment(source)
++  const start = projectedOffset(projection, range.startContainer, range.startOffset)
++  const end = projectedOffset(projection, range.endContainer, range.endOffset)
++  if (start === null || end === null) return null
++  const text = projection.text.slice(start, end).trim()
++  return text === '' ? null : text
++}
+diff --git a/packages/client/ui-chat/src/client/contract/slots.ts b/packages/client/ui-chat/src/client/contract/slots.ts
+index 72be63b686..d804950544 100644
+--- a/packages/client/ui-chat/src/client/contract/slots.ts
++++ b/packages/client/ui-chat/src/client/contract/slots.ts
+@@ -9,6 +9,7 @@ import type {
+   CommandNode, CompactionSummaryNode, ConversationLocationDataStore, ConversationTurnDataMap,
+   ConversationGroupData, GroupSnapshot,
+   MessageImageLoader, MessageImageSource, MessageImagesOwnerProps, RenderEntry, TurnLocation, UserTextFacts, UserTextInput,
++  TextInteractionGesture, TextInteractionSurface,
+ } from '@deepseek-ai/dsh-client-ui-conversation/client'
+ import type {
+   HostObservable, InjectFace, KeyedSnapshotSelectorHook, PropsLocale, PropsRenderSlots, PropsRuntime,
+@@ -302,7 +303,11 @@ export interface PerformanceUsageInjected {
+ 
+ /** Business callbacks injected into the Chat view. */
+ export interface ChatViewInjected {
++  /** Dispatch one gesture to the Conversation plugin registry. */
++  dispatchInteraction: (gesture: TextInteractionGesture) => string | null
+   hooks: {
++    /** Live plugin IDs; removed plugins dismiss their active surface. */
++    interactionIds: ObservableSnapshot<readonly string[]>
+     /** Live presentation policy derived from the accepted work-details mode. */
+     presentation: ObservableSnapshot<ChatPresentationPolicy>
+   }
+@@ -355,7 +360,7 @@ export type ChatFlowSlotProps =
+ /** Full Chat view props. */
+ export type ChatViewSlotProps =
+   PropsRuntime<'conversation.view'>
+-  & PropsRenderSlots<'conversation.chat.flow'>
++  & PropsRenderSlots<'conversation.chat.flow' | 'conversation.chat.text-interaction'>
+   & PropsStore<ChatStore>
+   & InjectFace<ChatViewInjected>
+   & PropsLocale<'chat'>
+@@ -393,6 +398,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+ 
+   interface SlotMap {
+     /** Ordered Chat rows and local echoes with viewport-bound visibility hooks. */
++    /** Area-local text gestures and surfaces; each consumer registers its own synchronous admission. */
++    'conversation.chat.text-interaction': { kind: 'keyed'; scope: 'session'; owner: TextInteractionSurface }
++
+     'conversation.chat.flow': {
+       kind: 'single'
+       scope: 'session'
+diff --git a/packages/client/ui-conversation/src/client/contract/input.ts b/packages/client/ui-conversation/src/client/contract/input.ts
+index c01ed5f99f..3ea48c5cbb 100644
+--- a/packages/client/ui-conversation/src/client/contract/input.ts
++++ b/packages/client/ui-conversation/src/client/contract/input.ts
+@@ -262,6 +262,12 @@ export interface InputActions {
+    * @returns false when the draft changed or submission locked the editor.
+    */
+   insertText(text: string, span: TokenSpan): boolean
++  /**
++   * Insert a quoted selection as a Markdown blockquote at the caret.
++   * @param text - the quoted selection.
++   * @returns whether the quote was applied.
++   */
++  insertQuote(text: string): boolean
+   /** Replace the whole draft with plain text, removing inline reference chips. */
+   setDraft(text: string): void
+   /** Write the current semantic document through the mounted persistence callback. */
+diff --git a/packages/client/ui-conversation/src/client/contract/text-interaction.ts b/packages/client/ui-conversation/src/client/contract/text-interaction.ts
+new file mode 100644
+index 0000000000..7f1707d61b
+--- /dev/null
++++ b/packages/client/ui-conversation/src/client/contract/text-interaction.ts
+@@ -0,0 +1,35 @@
++/** Conversation text gestures and plugin-owned action surfaces. */
++import type { SessionId } from '@deepseek-ai/dsh-session/types'
++
++/** Browser gesture offered to text interaction consumers. */
++export type TextInteractionTrigger = 'selection' | 'contextmenu'
++
++/** Synchronous browser gesture; reading text does not imply source-data offsets. */
++export interface TextInteractionGesture {
++  readonly trigger: TextInteractionTrigger
++  readonly hasSelection: boolean
++  readonly readText: () => string | null
++  /** Cancel the originating browser event during dispatch only. */
++  readonly preventDefault: () => void
++}
++
++/** Scoped gesture offered to one registered plugin. */
++export interface TextInteractionRequest extends TextInteractionGesture {
++  readonly sessionId: SessionId
++  /** Select this plugin's keyed surface for the current gesture. */
++  readonly open: () => void
++}
++
++/** One consumer whose ID also names its keyed Slot renderer. */
++export interface TextInteractionDefinition {
++  readonly id: string
++  readonly onInteraction: (request: TextInteractionRequest) => void
++}
++
++/** Area-local actions provided to the currently selected plugin component. */
++export interface TextInteractionSurface {
++  readonly trigger: TextInteractionTrigger
++  readonly dismiss: () => void
++  readonly readText: () => string | null
++  readonly clearSelection: () => void
++}
+diff --git a/packages/client/ui-conversation/src/client/conversation/assembly.ts b/packages/client/ui-conversation/src/client/conversation/assembly.ts
+index b6cfcd6318..e863eb3b44 100644
+--- a/packages/client/ui-conversation/src/client/conversation/assembly.ts
++++ b/packages/client/ui-conversation/src/client/conversation/assembly.ts
+@@ -24,6 +24,7 @@ import { ConversationEventRegistry } from './event-registry.ts'
+ import { HistoricalImageCache } from './historical-images.ts'
+ import { ConversationViewRegistry } from './view-registry.ts'
+ import { ConversationGroupRegistry } from './group-registry.ts'
++import { ConversationInteractionRegistry } from './interaction-registry.ts'
+ import { UserTextRegistry } from './user-text-registry.ts'
+ 
+ /** Observable faces published for one Session's Conversation assembly. */
+@@ -193,6 +194,8 @@ export class UiConversation extends Service {
+   readonly groups: ConversationGroupRegistry
+   /** Pure text rules and parser snapshots, independent of durable Session assembly. */
+   readonly userText: UserTextRegistry
++  /** Plugin-contributed text gestures and their admission rules. */
++  readonly interactions: ConversationInteractionRegistry
+   private readonly bindings = new WeakMapWithValues<SessionBinding, BindingRecord>()
+   private readonly images: HistoricalImageCache
+ 
+@@ -206,6 +209,7 @@ export class UiConversation extends Service {
+     this.views = new ConversationViewRegistry(ctx)
+     this.groups = new ConversationGroupRegistry(ctx, this.views)
+     this.userText = new UserTextRegistry(ctx)
++    this.interactions = new ConversationInteractionRegistry(ctx)
+     this.images = new HistoricalImageCache(ctx, sessions)
+     const rebuild = (): void => {
+       for (const record of this.bindings.values) record.binding.rebuild()
+diff --git a/packages/client/ui-conversation/src/client/conversation/interaction-registry.ts b/packages/client/ui-conversation/src/client/conversation/interaction-registry.ts
+new file mode 100644
+index 0000000000..bd909da841
+--- /dev/null
++++ b/packages/client/ui-conversation/src/client/conversation/interaction-registry.ts
+@@ -0,0 +1,55 @@
++/** Plugin-owned text gesture handlers, scoped by the dispatching conversation. */
++import type { SessionId } from '@deepseek-ai/dsh-session/types'
++import type { TextInteractionDefinition, TextInteractionGesture } from '../contract/text-interaction.ts'
++import { ConversationDefinitionRegistry } from './definition-registry.ts'
++
++/** Effect-owned registrations; active surfaces belong to individual Chat views. */
++export class ConversationInteractionRegistry extends ConversationDefinitionRegistry<TextInteractionDefinition> {
++  private ids: readonly string[] = []
++
++  /**
++   * Register a synchronous handler and its keyed renderer identity.
++   * @param definition - uniquely named plugin handler.
++   * @returns idempotent disposer tied to the registering plugin's lifetime.
++   */
++  register(definition: TextInteractionDefinition): () => void {
++    if (definition.id === '') throw new Error('text interaction ID must not be empty')
++    return this.registerDefinition(definition.id, definition,
++      `Duplicate text interaction: ${definition.id}`, `uiConversation.interactions.register(${JSON.stringify(definition.id)})`)
++  }
++
++  /**
++   * Offer a gesture until one handler opens its surface; opening never prevents browser defaults.
++   * @param sessionId - conversation where the gesture occurred.
++   * @param gesture - synchronous access to the browser event and DOM text.
++   * @returns selected renderer ID, or null when no plugin opens a surface.
++   */
++  dispatch(sessionId: SessionId, gesture: TextInteractionGesture): string | null {
++    for (const definition of this.entries()) {
++      const state = { opened: false }
++      let dispatching = true
++      try {
++        definition.onInteraction({
++          ...gesture, sessionId,
++          open: () => { if (dispatching) state.opened = true },
++          preventDefault: () => { if (dispatching) gesture.preventDefault() },
++        })
++      } finally { dispatching = false }
++      if (state.opened) return definition.id
++    }
++    return null
++  }
++
++  /**
++   * Observe registration changes so Chat views can dismiss stale surfaces.
++   * @returns stable IDs until the registry changes.
++   */
++  getSnapshot(): readonly string[] {
++    return this.ids
++  }
++
++  protected override refresh(): void {
++    this.ids = [...this.definitions.keys()]
++    super.refresh()
++  }
++}
+diff --git a/packages/client/ui-conversation/src/client/index.ts b/packages/client/ui-conversation/src/client/index.ts
+index 08a7432e1e..1413260240 100644
+--- a/packages/client/ui-conversation/src/client/index.ts
++++ b/packages/client/ui-conversation/src/client/index.ts
+@@ -113,3 +113,6 @@ declare module '@deepseek-ai/cordis' {
+     uiConversation: import('./conversation/assembly.ts').UiConversation
+   }
+ }
++
++export type { TextInteractionDefinition, TextInteractionGesture, TextInteractionRequest, TextInteractionSurface, TextInteractionTrigger } from './contract/text-interaction.ts'
++export type { ConversationInteractionRegistry } from './conversation/interaction-registry.ts'
+diff --git a/packages/client/ui-conversation/src/client/input/editor/QuoteNode.tsx b/packages/client/ui-conversation/src/client/input/editor/QuoteNode.tsx
+new file mode 100644
+index 0000000000..ecd42af89d
+--- /dev/null
++++ b/packages/client/ui-conversation/src/client/input/editor/QuoteNode.tsx
+@@ -0,0 +1,152 @@
++/** Atomic composer quote node and whole-node removal command. */
++
++import type { JSX } from 'react'
++import { QuotePreview } from '@deepseek-ai/dsh-client-ui-primitives'
++import { formatQuoteText } from '@deepseek-ai/dsh-client-ui-primitives'
++import type {
++  EditorConfig, LexicalEditor, LexicalNode, NodeKey, SerializedLexicalNode, Spread,
++} from 'lexical'
++import { createCommand, DecoratorNode } from 'lexical'
++
++/** Localized non-persisted labels applied by the owning input shell. */
++export interface QuoteNodeLabels {
++  readonly remove: string
++}
++
++const EMPTY_LABELS: QuoteNodeLabels = { remove: '' }
++
++/** JSON form used only by Lexical's editor-state APIs, not browser persistence. */
++export type SerializedQuoteNode = Spread<{
++  text: string
++}, SerializedLexicalNode>
++
++/** Remove one quote occurrence by its Lexical identity. */
++export const REMOVE_QUOTE_COMMAND = createCommand<NodeKey>('REMOVE_QUOTE_COMMAND')
++
++/** Pure React face of one quote node. */
++export function QuoteNodeView({ editor, nodeKey, text, labels }: {
++  readonly editor: LexicalEditor
++  readonly nodeKey: NodeKey
++  readonly text: string
++  readonly labels: QuoteNodeLabels
++}) {
++  return (
++    <QuotePreview
++      text={text}
++      removal={{
++        label: labels.remove,
++        onRemove: () => { editor.dispatchCommand(REMOVE_QUOTE_COMMAND, nodeKey) },
++      }}
++    />
++  )
++}
++
++/** One selected transcript range represented as an atomic inline decorator. */
++export class QuoteNode extends DecoratorNode<JSX.Element> {
++  __text: string
++  __labels: QuoteNodeLabels
++
++  /** Lexical node registry type tag. */
++  static override getType(): string {
++    return 'quote'
++  }
++
++  /** @param node - node to clone. @returns a copy carrying the same NodeKey. */
++  static override clone(node: QuoteNode): QuoteNode {
++    return new QuoteNode(
++      node.__text,
++      node.__labels,
++      node.__key,
++    )
++  }
++
++  /** @param json - serialized editor node. @returns a fresh node with default runtime labels. */
++  static override importJSON(json: SerializedQuoteNode): QuoteNode {
++    return new QuoteNode(json.text)
++  }
++
++  /**
++   * @param text - selected text.
++   * @param labels - runtime-only localized labels.
++   * @param key - Lexical clone-path key; absent for fresh nodes.
++   */
++  constructor(
++    text: string,
++    labels: QuoteNodeLabels = EMPTY_LABELS,
++    key?: NodeKey,
++  ) {
++    super(key)
++    this.__text = text
++    this.__labels = labels
++  }
++
++  /** Serialize the quote data without its runtime presentation state. */
++  override exportJSON(): SerializedQuoteNode {
++    return {
++      ...super.exportJSON(),
++      type: 'quote',
++      version: 1,
++      text: this.__text,
++    }
++  }
++
++  /** Mount one non-editable inline host. */
++  override createDOM(_config: EditorConfig): HTMLElement {
++    const element = document.createElement('span')
++    element.setAttribute('data-composer-quote', '')
++    element.setAttribute('contenteditable', 'false')
++    return element
++  }
++
++  /** Updates reuse the existing host element. */
++  override updateDOM(): boolean {
++    return false
++  }
++
++  /** Quotes flow with draft text and wrap at their own text boundary. */
++  override isInline(): boolean {
++    return true
++  }
++
++  /** Arrow movement crosses the quote without entering a NodeSelection. */
++  override isKeyboardSelectable(): boolean {
++    return false
++  }
++
++  /** Clipboard text is the exact model-visible Markdown blockquote. */
++  override getTextContent(): string {
++    return formatQuoteText(this.__text)
++  }
++
++  /** Selected visible quote text. */
++  getQuoteText(): string {
++    return this.getLatest().__text
++  }
++
++  /** Update the localized remove label without changing persisted quote data. */
++  setLabels(labels: QuoteNodeLabels): void {
++    if (this.getLatest().__labels.remove !== labels.remove) this.getWritable().__labels = labels
++  }
++
++  /** Render the quote body and its independent close control. */
++  override decorate(editor: LexicalEditor): JSX.Element {
++    return (
++      <QuoteNodeView
++        editor={editor}
++        nodeKey={this.__key}
++        text={this.__text}
++        labels={this.__labels}
++      />
++    )
++  }
++}
++
++/** @param text - selected quote text. @param labels - runtime labels. @returns a fresh node. */
++export function $createQuoteNode(text: string, labels: QuoteNodeLabels): QuoteNode {
++  return new QuoteNode(text, labels)
++}
++
++/** @param node - possible Lexical node. @returns whether it is a QuoteNode. */
++export function $isQuoteNode(node: LexicalNode | null | undefined): node is QuoteNode {
++  return node instanceof QuoteNode
++}
+diff --git a/packages/client/ui-conversation/src/client/input/facade.ts b/packages/client/ui-conversation/src/client/input/facade.ts
+index 1965b30d12..928e83bdd7 100644
+--- a/packages/client/ui-conversation/src/client/input/facade.ts
++++ b/packages/client/ui-conversation/src/client/input/facade.ts
+@@ -128,6 +128,13 @@ export class SessionInputShell implements SessionInput {
+       if (span.draftRev !== this.rev) return false
+       return this.draftEditor.insertAsyncText(span, text)
+     },
++    insertQuote: (text) => {
++      if (this.snapshot.phase === 'adjudicating' || this.snapshot.phase === 'submitting' || this.disposed) return false
++      const quoted = text.replace(/\r\n?/gu, '\n').trim()
++      if (quoted === '') return false
++      const block = quoted.split('\n').map(line => `> ${line}`).join('\n')
++      return this.draftEditor.insertAsyncText(this.caretSpan(), `${block}\n\n`)
++    },
+     setDraft: (text) => { this.setDraft(text) },
+     persistDraft: () => { this.persistCurrentDraft() },
+     addAttachments: ids => this.addAttachments(ids),
+diff --git a/packages/client/ui-primitives/src/QuotePreview.module.css b/packages/client/ui-primitives/src/QuotePreview.module.css
+new file mode 100644
+index 0000000000..1418d8393c
+--- /dev/null
++++ b/packages/client/ui-primitives/src/QuotePreview.module.css
+@@ -0,0 +1,101 @@
++.quote {
++  display: inline-flex;
++  align-items: baseline;
++  gap: 4px;
++  box-sizing: border-box;
++  max-width: min(80%, 300px);
++  margin: 0;
++  padding: 0;
++  vertical-align: baseline;
++  color: var(--dsw-alias-state-business-primary);
++  font-size: var(--dsh-content-font-size, 14px);
++  line-height: calc(20px + var(--dsh-content-font-delta, 0px));
++}
++
++.popoverText {
++  display: block;
++  padding: 8px 10px;
++  color: var(--dsw-alias-label-primary);
++  font-size: 14px;
++  line-height: 20px;
++  overflow-wrap: anywhere;
++  white-space: pre-wrap;
++}
++
++.source {
++  min-width: 0;
++  padding: 0;
++  border: none;
++  outline: none;
++  background: none;
++  color: inherit;
++  font: inherit;
++  line-height: inherit;
++  text-align: left;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.marker,
++.remove {
++  display: grid;
++  place-items: center;
++  align-self: center;
++  flex: none;
++  width: 16px;
++  height: 16px;
++  padding: 0;
++  color: inherit;
++  user-select: none;
++}
++
++.marker {
++  pointer-events: none;
++}
++
++.remove {
++  border: none;
++  border-radius: 50%;
++  corner-shape: round;
++  background: transparent;
++  cursor: pointer;
++}
++
++.quoteMark,
++.closeMark {
++  grid-area: 1 / 1;
++  transition: opacity 120ms ease;
++}
++
++.closeMark {
++  opacity: 0;
++}
++
++.quote[data-removable]:focus-within .quoteMark {
++  opacity: 0;
++}
++
++.quote[data-removable]:focus-within .closeMark {
++  opacity: 1;
++}
++
++@media (hover: hover) {
++  .quote[data-removable]:hover .quoteMark {
++    opacity: 0;
++  }
++
++  .quote[data-removable]:hover .closeMark {
++    opacity: 1;
++  }
++}
++
++@media (hover: none) {
++  .quote[data-removable] .quoteMark {
++    opacity: 0;
++  }
++
++  .quote[data-removable] .closeMark {
++    opacity: 1;
++  }
++}
+diff --git a/packages/client/ui-primitives/src/QuotePreview.tsx b/packages/client/ui-primitives/src/QuotePreview.tsx
+new file mode 100644
+index 0000000000..e96ae31146
+--- /dev/null
++++ b/packages/client/ui-primitives/src/QuotePreview.tsx
+@@ -0,0 +1,102 @@
++/** Shared compact presentation for draft and sent text quotes. */
++
++import { useLayoutEffect, useRef, useState } from 'react'
++import type { JSX, MouseEvent as ReactMouseEvent } from 'react'
++import { IconCloseOutlineRegular } from './icons/index.tsx'
++import { HoverCard } from './HoverCard.tsx'
++import css from './QuotePreview.module.css'
++
++function QuoteMarkIcon({ className }: { readonly className?: string | undefined }) {
++  return (
++    <svg width={16} height={16} className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
++      <g transform="translate(6.8 2.4)">
++        <path d="M2.8125 0.583008L3.2002 1.16602C2.43912 1.6713 1.88491 2.41238 1.60547 3.25684H2.98926V6.70605H0V4.52148C1.96593e-05 2.70313 0.9109 1.00575 2.42578 0L2.8125 0.583008Z" fill="currentColor" />
++        <path d="M7.50781 0.583008L7.89551 1.16602C7.13443 1.6713 6.58022 2.41238 6.30078 3.25684H7.68457V6.70605H4.69531V4.52148C4.69533 2.70313 5.60621 1.00575 7.12109 0L7.50781 0.583008Z" fill="currentColor" />
++      </g>
++    </svg>
++  )
++}
++
++/** Optional whole-quote removal control supplied by an editable owner. */
++export interface QuotePreviewRemoval {
++  /** Localized accessible name for the removal button. */
++  readonly label: string
++  /** Remove the complete owning quote node. */
++  readonly onRemove: () => void
++}
++
++/** Presentation inputs for one compact quote excerpt. */
++export interface QuotePreviewProps {
++  /** Exact selected text rendered inline and exposed in a popover while clipped. */
++  readonly text: string
++  /** Composer-only removal action; omit for inert sent quotes. */
++  readonly removal?: QuotePreviewRemoval | undefined
++}
++
++/**
++ * Render one width-capped quote preview shared by editable drafts and sent messages.
++ * Clipped excerpts open a content-sized, scrollable popover that fits within the viewport.
++ * @param props - selected text and optional localized removal action.
++ * @returns a non-navigating quote preview with a full-text popover only while clipped.
++ */
++export function QuotePreview({ text, removal }: QuotePreviewProps): JSX.Element {
++  const sourceRef = useRef<HTMLSpanElement | null>(null)
++  const [truncated, setTruncated] = useState(false)
++  useLayoutEffect(() => {
++    const source = sourceRef.current
++    /* v8 ignore next -- the ref is attached before layout effects run. */
++    if (source === null) return
++    const measure = () => {
++      const clipped = source.scrollWidth > source.clientWidth
++      setTruncated(clipped)
++    }
++    measure()
++    if (typeof ResizeObserver === 'undefined') return
++    const observer = new ResizeObserver(measure)
++    observer.observe(source)
++    return () => { observer.disconnect() }
++  }, [text])
++  const remove = (event: ReactMouseEvent<HTMLButtonElement>): void => {
++    event.preventDefault()
++    event.stopPropagation()
++    removal?.onRemove()
++  }
++  const preview = (
++    <span
++      className={css.quote}
++      data-quote-preview=""
++      data-removable={removal === undefined ? undefined : ''}
++    >
++      {removal === undefined
++        ? (
++          <span className={css.marker} aria-hidden>
++            <QuoteMarkIcon className={css.quoteMark} />
++          </span>
++        )
++        : (
++          <button
++            type="button"
++            className={css.remove}
++            aria-label={removal.label}
++            onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }}
++            onKeyDown={(event) => { event.stopPropagation() }}
++            onClick={remove}
++          >
++            <QuoteMarkIcon className={css.quoteMark} />
++            <IconCloseOutlineRegular size={12} className={css.closeMark} />
++          </button>
++        )}
++      <span ref={sourceRef} className={css.source} data-quote-preview-text="">{text}</span>
++    </span>
++  )
++  return (
++    <HoverCard
++      inline
++      grouped
++      openDelayMs={0}
++      disabled={!truncated}
++      anchor={preview}
++      content={<span className={css.popoverText} data-quote-popover="" aria-hidden="true">{text}</span>}
++    />
++  )
++}
+diff --git a/packages/client/ui-primitives/src/index.ts b/packages/client/ui-primitives/src/index.ts
+index 18f9544405..309b9ebcf7 100644
+--- a/packages/client/ui-primitives/src/index.ts
++++ b/packages/client/ui-primitives/src/index.ts
+@@ -117,3 +117,6 @@ export {
+ export { GuideArtworkBrowser, GuideArtworkFiles } from './guide-artwork.tsx'
+ export { ImageLightbox } from './ImageLightbox.tsx'
+ export type { ImageLightboxLabels } from './ImageLightbox.tsx'
++export { QuotePreview } from './QuotePreview.tsx'
++export type { QuotePreviewProps, QuotePreviewRemoval } from './QuotePreview.tsx'
++export { formatQuoteText } from './markdown/quote-text.ts'
+diff --git a/packages/client/ui-primitives/src/markdown/quote-text.ts b/packages/client/ui-primitives/src/markdown/quote-text.ts
+new file mode 100644
+index 0000000000..603855d624
+--- /dev/null
++++ b/packages/client/ui-primitives/src/markdown/quote-text.ts
+@@ -0,0 +1,10 @@
++/** Shared Markdown blockquote formatting for browser text. */
++
++/**
++ * Project selected visible text as an ordinary Markdown blockquote.
++ * @param text - selected visible text without quote markers.
++ * @returns one `> `-prefixed line per normalized input line.
++ */
++export function formatQuoteText(text: string): string {
++  return text.replace(/\r\n?/gu, '\n').split('\n').map(line => `> ${line}`).join('\n')
++}
+diff --git a/packages/session/message-quotes/README.i18n.yaml b/packages/session/message-quotes/README.i18n.yaml
+new file mode 100644
+index 0000000000..8d01daa025
+--- /dev/null
++++ b/packages/session/message-quotes/README.i18n.yaml
+@@ -0,0 +1,46 @@
++# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
++# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
++# After editing either side, bring the other along and re-record with:
++#   pnpm run verify-translation-pairing --write packages/session/message-quotes/README.md
++/:
++  en: 3747c4c75b3f49e0
++  zh: 5b0b9248cb91d91b
++/deepseek-ai-dsh-message-quotes:
++  en: a98d2b6bfee45c56
++  zh: 853c079ed4cdae27
++/deepseek-ai-dsh-message-quotes/summary:
++  en: a4646537fb9c8371
++  zh: d4a008fe576720c6
++/deepseek-ai-dsh-message-quotes/table-of-contents:
++  en: d152484eb41ac6b4
++  zh: 405b30feaf48c087
++/deepseek-ai-dsh-message-quotes/use-this-package:
++  en: 5a2c3edf0a026abe
++  zh: aec2f54b6d833591
++/deepseek-ai-dsh-message-quotes/understand-the-implementation:
++  en: e5c91bdecff724e5
++  zh: 655c2528d111ac32
++/deepseek-ai-dsh-message-quotes/further-exploration:
++  en: bcf07b5197b746ce
++  zh: 206f79eb606baac7
++/deepseek-ai-dsh-message-quotes/model-experience:
++  en: 215e7ba838619b7b
++  zh: a311da3843709f90
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text:
++  en: 4570ae90b328ddf5
++  zh: 5c2c95075c5e0fa4
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text/what-the-model-sees:
++  en: 913152fe14c493f6
++  zh: 3bdf114beaff1e04
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text/token-effect:
++  en: af92deb8bf69432b
++  zh: 2582520fcb9b982e
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text/kv-cache-effect:
++  en: 626c54bc58b74f8f
++  zh: 82a5a8a445734d64
++/deepseek-ai-dsh-message-quotes/known-limitations-and-deferred-work:
++  en: 4d2c9783f0268d55
++  zh: 40d6d48ceed3194c
++/deepseek-ai-dsh-message-quotes/known-limitations-and-deferred-work/dev-note:
++  en: e67f633dc6fe7773
++  zh: 8ec3e73528ddb1a6
+diff --git a/packages/session/message-quotes/README.md b/packages/session/message-quotes/README.md
+new file mode 100644
+index 0000000000..60ecd38894
+--- /dev/null
++++ b/packages/session/message-quotes/README.md
+@@ -0,0 +1,83 @@
++---
++description: "Quotation controls and Markdown blockquote presentation."
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-message-quotes
++
++English | [中文](README.zh.md)
++
++## Summary
++
++`dsh-message-quotes` registers quotation controls and transcript rendering on the Client. Messages retain ordinary Markdown text without quote metadata or content indexes.
++
++## Table of Contents
++
++- [Use this package](#use-this-package)
++- [Understand the implementation](#understand-the-implementation)
++- [Further Exploration](#further-exploration)
++- [Model Experience](#model-experience)
++- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
++- [Dev Note](#dev-note)
++
++-----
++
++<a id="use-this-package"></a>
++## Use this package
++
++The Web bundle mounts this plugin. Its Client entry registers the selection action with `ctx.uiConversation.interactions` and renders quotes through UserText rules. Registrations are removed when the plugin unloads. The selection button uses the shared floating-surface stroke and shadow.
++
++-----
++
++<a id="understand-the-implementation"></a>
++## Understand the implementation
++
++<details>
++<summary>Implementation internals — click to expand</summary>
++
++The shared [Markdown formatter](../../client/ui-primitives/README.md#rendering-agent-output) encodes quoted text for the composer. The plugin owns [quote recognition and decoding](src/client/quote-text.ts). Quote previews render their contents as plain text, including recognized Session labels, with uniform typography and no reference-chip decoration. Selection eligibility, local positioning, and dismissal belong to the conversation interaction service; the quote action extracts its text from the DOM. The composer owns QuoteNode editing and serialization.
++
++</details>
++
++-----
++
++<a id="further-exploration"></a>
++## Further Exploration
++
++- [Session package map](../README.md) — related persistence and projection packages.
++- [Conversation subsystem](../../../docs/subsystems/conversation.md) — composer and transcript consumers.
++
++-----
++
++<a id="model-experience"></a>
++## Model Experience
++
++### Quoted message text
++
++#### What the model sees
++
++The composer sends selected text as ordinary Markdown blockquotes, with one `> ` prefix per line. Session-reference and skill processing applies normally to quoted text.
++
++#### Token effect
++
++Quote text and its line prefixes contribute ordinary input tokens.
++
++#### KV Cache effect
++
++The plugin rewrites no history. Consumers append the encoded text as user content after the existing prefix.
++
++## Known Limitations and Deferred Work
++
++<a id="known-limitations-and-deferred-work"></a>
++
++- Recognition covers explicitly marked lines with up to three leading spaces; it does not implement Markdown lazy continuation or fenced-code parsing.
++
++<a id="dev-note"></a>
++### Dev Note
++
++<details>
++<summary>Working context for maintainers — click to expand</summary>
++
++None.
++
++</details>
+diff --git a/packages/session/message-quotes/README.zh.md b/packages/session/message-quotes/README.zh.md
+new file mode 100644
+index 0000000000..91d95c4165
+--- /dev/null
++++ b/packages/session/message-quotes/README.zh.md
+@@ -0,0 +1,83 @@
++---
++description: "提供引用控件与 Markdown blockquote 展示的插件。"
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-message-quotes
++
++[English](README.md) | 中文
++
++## 概述
++
++`dsh-message-quotes` 在 Client 注册引用控件和转录渲染。消息保留普通 Markdown 文本，无需 quote 元数据或 content 索引。
++
++## 目录
++
++- [使用本包](#use-this-package)
++- [理解实现](#understand-the-implementation)
++- [延伸阅读](#further-exploration)
++- [模型体验](#model-experience)
++- [已知限制与后续工作](#known-limitations-and-deferred-work)
++- [开发备注](#dev-note)
++
++-----
++
++<a id="use-this-package"></a>
++## 使用本包
++
++Web bundle 挂载此插件。Client 入口向 `ctx.uiConversation.interactions` 注册选区操作，并通过 UserText 规则渲染引用。插件卸载时会移除这些注册。选区按钮使用共享浮层描边与阴影。
++
++-----
++
++<a id="understand-the-implementation"></a>
++## 理解实现
++
++<details>
++<summary>实现细节 — 点击展开</summary>
++
++输入框使用共享的 [Markdown 格式化工具](../../client/ui-primitives/README.zh.md#rendering-agent-output) 编码引用文本；插件负责[引用识别与解码](src/client/quote-text.ts)。Quote 预览将正文及已识别的 Session 标签作为纯文本呈现，统一文字样式，不展示 reference chip 装饰。选区是否可操作、原地定位与关闭由 conversation 交互服务负责；引用操作从 DOM 提取文本。输入框负责 QuoteNode 编辑和序列化。
++
++</details>
++
++-----
++
++<a id="further-exploration"></a>
++## 延伸阅读
++
++- [Session 包索引](../README.zh.md) — 相关持久化和投影包。
++- [Conversation 子系统](../../../docs/subsystems/conversation.zh.md) — 编辑器和对话呈现消费方。
++
++-----
++
++<a id="model-experience"></a>
++## 模型体验
++
++### 引用消息文本
++
++#### 模型可见内容
++
++输入框将选中文本作为普通 Markdown blockquote 发送，每行带一个 `> ` 前缀。Session-reference 与 skill 处理照常作用于引用文本。
++
++#### Token 影响
++
++引用文本及其行前缀贡献普通输入 token。
++
++#### KV Cache 影响
++
++该插件不改写历史。消费方将编码文本作为用户内容追加到现有前缀之后。
++
++## 已知限制与后续工作
++
++<a id="known-limitations-and-deferred-work"></a>
++
++- 识别范围为最多带三个前导空格的显式引用行；不实现 Markdown 懒惰续行或代码围栏解析。
++
++<a id="dev-note"></a>
++### 开发备注
++
++<details>
++<summary>维护者工作上下文 — 点击展开</summary>
++
++无。
++
++</details>
+diff --git a/packages/session/message-quotes/locale/de.json b/packages/session/message-quotes/locale/de.json
+new file mode 100644
+index 0000000000..48aa810c81
+--- /dev/null
++++ b/packages/session/message-quotes/locale/de.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Nachrichtenzitate",
++    "description": "Ausgewählten Text zitieren und als Markdown-Blockzitat anzeigen."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/en.json b/packages/session/message-quotes/locale/en.json
+new file mode 100644
+index 0000000000..dd73eca27a
+--- /dev/null
++++ b/packages/session/message-quotes/locale/en.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Message quotes",
++    "description": "Quote selected text and display it as a Markdown block quote."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/es.json b/packages/session/message-quotes/locale/es.json
+new file mode 100644
+index 0000000000..f0b791f4f2
+--- /dev/null
++++ b/packages/session/message-quotes/locale/es.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Citas de mensajes",
++    "description": "Cita el texto seleccionado y muéstralo como una cita en bloque Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/fr.json b/packages/session/message-quotes/locale/fr.json
+new file mode 100644
+index 0000000000..64b38b5a5f
+--- /dev/null
++++ b/packages/session/message-quotes/locale/fr.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Citations de messages",
++    "description": "Citez le texte sélectionné et affichez-le sous forme de citation en bloc Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/ja.json b/packages/session/message-quotes/locale/ja.json
+new file mode 100644
+index 0000000000..02a0474244
+--- /dev/null
++++ b/packages/session/message-quotes/locale/ja.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "メッセージ引用",
++    "description": "選択したテキストを引用し、Markdown の引用ブロックとして表示します。"
++  }
++}
+diff --git a/packages/session/message-quotes/locale/pt.json b/packages/session/message-quotes/locale/pt.json
+new file mode 100644
+index 0000000000..dbc3dcb4d4
+--- /dev/null
++++ b/packages/session/message-quotes/locale/pt.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Citações de mensagens",
++    "description": "Cite o texto selecionado e exiba-o como uma citação em bloco Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/ru.json b/packages/session/message-quotes/locale/ru.json
+new file mode 100644
+index 0000000000..2328853e75
+--- /dev/null
++++ b/packages/session/message-quotes/locale/ru.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Цитаты сообщений",
++    "description": "Цитируйте выделенный текст и отображайте его как блочную цитату Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/zh.json b/packages/session/message-quotes/locale/zh.json
+new file mode 100644
+index 0000000000..e739f21ccf
+--- /dev/null
++++ b/packages/session/message-quotes/locale/zh.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "消息引用",
++    "description": "引用选中的文本，并用 Markdown 引用块展示。"
++  }
++}
+diff --git a/packages/session/message-quotes/package.json b/packages/session/message-quotes/package.json
+new file mode 100644
+index 0000000000..b1f5a2d178
+--- /dev/null
++++ b/packages/session/message-quotes/package.json
+@@ -0,0 +1,68 @@
++{
++  "name": "@deepseek-ai/dsh-message-quotes",
++  "description": "Selected-text quotation and Markdown blockquote presentation",
++  "version": "0.2.2-alpha.2",
++  "publishConfig": {
++    "access": "public"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
++    "directory": "packages/session/message-quotes"
++  },
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./src/*": "./src/*",
++    "./locale/*.json": "./locale/*.json",
++    "./package.json": "./package.json",
++    "./client": {
++      "types": "./lib/types/client/index.d.ts",
++      "default": "./lib/client.js"
++    }
++  },
++  "files": [
++    "locale/*.json",
++    "lib/index.js",
++    "lib/client.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "license": "MIT",
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:~"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-api-session-controller": "workspace:*",
++    "@deepseek-ai/dsh-client-locale": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-chat": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-conversation": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",
++    "react": "^18.2.0",
++    "@deepseek-ai/dsh-client-test-runtime": "workspace:*",
++    "@deepseek-ai/dsh-session": "workspace:*"
++  },
++  "dsh": {
++    "client": {
++      "inject": [
++        "@deepseek-ai/dsh-api-session-controller",
++        "@deepseek-ai/dsh-client-locale",
++        "@deepseek-ai/dsh-client-ui-chat",
++        "@deepseek-ai/dsh-client-ui-conversation",
++        "@deepseek-ai/dsh-client-ui-renderer"
++      ],
++      "platform": "web"
++    }
++  },
++  "scripts": {
++    "bundle": "tsdown",
++    "watch": "tsdown --watch"
++  }
++}
+diff --git a/packages/session/message-quotes/src/client/QuoteSelection.module.css b/packages/session/message-quotes/src/client/QuoteSelection.module.css
+new file mode 100644
+index 0000000000..66eda4cfe6
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/QuoteSelection.module.css
+@@ -0,0 +1,22 @@
++.action {
++  padding: 5px 10px;
++  border: none;
++  border-radius: 999px;
++  corner-shape: round;
++  background: var(--dsw-alias-button-floating-fill);
++  --dsw-elevation-stroke-color: var(--dsw-alias-border-l3);
++  box-shadow: var(--dsw-elevation-panel);
++  color: var(--dsw-alias-label-primary);
++  font: var(--dsw-font-xs-13);
++  cursor: pointer;
++}
++
++.action:focus-visible {
++  background: var(--dsw-alias-button-floating-hover);
++}
++
++@media (hover: hover) {
++  .action:hover {
++    background: var(--dsw-alias-button-floating-hover);
++  }
++}
+diff --git a/packages/session/message-quotes/src/client/QuoteSelection.tsx b/packages/session/message-quotes/src/client/QuoteSelection.tsx
+new file mode 100644
+index 0000000000..431628ac91
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/QuoteSelection.tsx
+@@ -0,0 +1,28 @@
++/** Quote action rendered through the Chat text-interaction Slot. */
++import { useEffect } from 'react'
++import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
++import css from './QuoteSelection.module.css'
++
++/**
++ * Render the action for a selection admitted by the Quote plugin.
++ * @param props - area-local text interaction and standard Session/composer seats.
++ * @returns the quote button after a valid selection in a writable conversation.
++ */
++export function QuoteSelectionAction({ dismiss, readText, clearSelection, inputActions, useSession, t }:
++PropsRuntime<'conversation.chat.text-interaction'> & PropsLocale<'messageQuotes'>) {
++  const enabled = useSession(s => !s.removed && (s.subagent === null
++    || (s.subagent.address.mode === 'continuable' && s.subagent.parentAvailable === true)))
++  useEffect(() => {
++    if (!enabled) dismiss()
++  }, [enabled, dismiss])
++  if (!enabled) return null
++  return <button type="button" className={css.action} aria-label={t('quote.add')}
++    onPointerDown={(event) => { event.preventDefault() }}
++    onClick={() => {
++      const text = readText()
++      if (text === null) { dismiss(); return }
++      if (!inputActions.insertQuote(text)) return
++      clearSelection()
++      dismiss()
++    }}>{t('quote.add')}</button>
++}
+diff --git a/packages/session/message-quotes/src/client/QuotedUserText.tsx b/packages/session/message-quotes/src/client/QuotedUserText.tsx
+new file mode 100644
+index 0000000000..585947d3f6
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/QuotedUserText.tsx
+@@ -0,0 +1,12 @@
++/** Literal display for text-derived quote nodes. */
++import { QuotePreview } from '@deepseek-ai/dsh-client-ui-primitives'
++import type { UserTextNodeProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
++
++/**
++ * Display decoded quote text without further interpretation.
++ * @param props - the quote node produced by the registered blockquote matcher.
++ * @returns the shared literal excerpt and clipped full-text popover.
++ */
++export function QuotedUserText({ node }: UserTextNodeProps<'quote'>) {
++  return <QuotePreview text={node.data.text} />
++}
+diff --git a/packages/session/message-quotes/src/client/index.ts b/packages/session/message-quotes/src/client/index.ts
+new file mode 100644
+index 0000000000..09e352267e
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/index.ts
+@@ -0,0 +1,53 @@
++/** Quote selection actions and literal UserText excerpts registered by the browser plugin. */
++import type { Context } from '@deepseek-ai/cordis'
++import type {} from '@deepseek-ai/dsh-api-session-controller/client'
++import type {} from '@deepseek-ai/dsh-client-locale/client'
++import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
++import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
++import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
++import { QuoteSelectionAction } from './QuoteSelection.tsx'
++import { QuotedUserText } from './QuotedUserText.tsx'
++import { quoteRule } from './quote-rule.ts'
++import { en, NS, zh, type MessageQuotesKey } from './locales.ts'
++
++export type {} from './quote-rule.ts'
++
++declare module '@deepseek-ai/dsh-client-ui-slots' {
++  interface LocaleNamespaceMap {
++    /** Quote selection action copy. */
++    messageQuotes: MessageQuotesKey
++  }
++}
++
++/** Browser plugin name. */
++export const name = 'message-quotes'
++
++/** Services needed to admit selections and register Quote presentation. */
++export const inject = ['slots', 'locale', 'sessions', 'uiConversation']
++
++/**
++ * Register Quote admission, its action surface, and literal UserText rendering.
++ * @param ctx - Client root context owning every Quote contribution.
++ */
++export function apply(ctx: Context): void {
++  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'message-quotes: dictionaries')
++  ctx.effect(() => ctx.uiConversation.userText.register(quoteRule), 'message-quotes: UserText rule')
++  ctx.effect(() => ctx.uiConversation.interactions.register({
++    id: 'quote',
++    onInteraction(request) {
++      if (request.trigger !== 'selection' || request.readText() === null) return
++      const binding = ctx.sessions.binding(request.sessionId)
++      if (binding === undefined) return
++      const session = binding.session.getSnapshot()
++      if (session.removed || (session.subagent !== null
++        && (session.subagent.address.mode !== 'continuable' || session.subagent.parentAvailable !== true))) return
++      request.open()
++    },
++  }), 'message-quotes: selection interaction')
++  ctx.slots.inject('conversation.chat.text-interaction', () => ctx.slots.register({
++    name: 'conversation.chat.text-interaction', key: 'quote', locale: NS,
++  }, QuoteSelectionAction))
++  ctx.slots.inject('conversation.user.text.node', () => ctx.slots.register({
++    name: 'conversation.user.text.node', key: 'quote', priority: 100,
++  }, QuotedUserText))
++}
+diff --git a/packages/session/message-quotes/src/client/locales.ts b/packages/session/message-quotes/src/client/locales.ts
+new file mode 100644
+index 0000000000..4d704e803e
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/locales.ts
+@@ -0,0 +1,47 @@
++/** Copy owned by the Quote interaction plugin. */
++
++/** Quote plugin dictionary namespace. */
++export const NS = 'messageQuotes'
++
++/** Simplified Chinese dictionary and key source. */
++export const zh = {
++  'quote.add': '引用文本',
++}
++
++/** Supported Quote interaction copy keys. */
++export type MessageQuotesKey = keyof typeof zh
++
++/** English dictionary. */
++export const en: Record<MessageQuotesKey, string> = {
++  'quote.add': 'Quote text',
++}
++
++/** Japanese dictionary. */
++export const ja = {
++  'quote.add': 'テキストを引用',
++} satisfies Record<MessageQuotesKey, string>
++
++/** Spanish dictionary, checked against the English keys. */
++export const es = {
++  'quote.add': 'Texto de cotización',
++} satisfies Record<keyof typeof en, string>
++
++/** French dictionary, checked against the English keys. */
++export const fr = {
++  'quote.add': 'Texte de citation',
++} satisfies Record<keyof typeof en, string>
++
++/** German dictionary, checked against the English keys. */
++export const de = {
++  'quote.add': 'Zitattext',
++} satisfies Record<keyof typeof en, string>
++
++/** Russian dictionary, checked against the English keys. */
++export const ru = {
++  'quote.add': 'Текст цитаты',
++} satisfies Record<keyof typeof en, string>
++
++/** Portuguese dictionary, checked against the English keys. */
++export const pt = {
++  'quote.add': 'Citação de texto',
++} satisfies Record<keyof typeof en, string>
+diff --git a/packages/session/message-quotes/src/client/quote-rule.ts b/packages/session/message-quotes/src/client/quote-rule.ts
+new file mode 100644
+index 0000000000..9a03cd9a5d
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/quote-rule.ts
+@@ -0,0 +1,29 @@
++/** Markdown blockquotes produce atomic quote nodes and inline separator replacements. */
++import { messageQuoteRanges, quoteTextOf } from './quote-text.ts'
++import type { UserTextRule } from '@deepseek-ai/dsh-client-ui-conversation/client'
++
++declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
++  interface UserTextDataMap {
++    quote: { readonly text: string }
++  }
++}
++
++/** Recognize blockquote lines and display adjacent paragraph separators as inline spaces. */
++export const quoteRule: UserTextRule<'quote'> = {
++  id: 'quote',
++  order: -10,
++  match(text, from) {
++    for (const range of messageQuoteRanges(text)) {
++      for (const start of [range.start - 2, range.start, range.end]) {
++        if (start < from) continue
++        if (start === range.start) {
++          return { id: 'quote', start, end: range.end, data: { text: quoteTextOf(text.slice(start, range.end)) } }
++        }
++        if (text.slice(start, start + 2) === '\n\n') {
++          return { id: 'text', start, end: start + 2, data: { text: '\n\n', display: ' ' } }
++        }
++      }
++    }
++    return undefined
++  },
++}
+diff --git a/packages/session/message-quotes/src/client/quote-text.ts b/packages/session/message-quotes/src/client/quote-text.ts
+new file mode 100644
+index 0000000000..ac9768e9b9
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/quote-text.ts
+@@ -0,0 +1,29 @@
++/** Explicit blockquote recognition and decoding for quote presentation. */
++
++/**
++ * Remove one blockquote marker from each explicitly quoted line.
++ * @param text - consecutive blockquote lines, with up to three leading spaces.
++ * @returns excerpt text with original line endings normalized.
++ */
++export function quoteTextOf(text: string): string {
++  return text.replace(/\r\n?/gu, '\n').replace(/^ {0,3}>[ \t]?/gmu, '')
++}
++
++/** One blockquote span in original UTF-16 text, excluding its trailing line break. */
++export interface MessageQuoteRange {
++  readonly start: number
++  readonly end: number
++}
++
++/**
++ * Recognize consecutive explicitly marked Markdown blockquote lines.
++ * @param text - complete original message text.
++ * @returns ordered nonblank quote spans; inline greater-than signs remain ordinary text.
++ */
++export function messageQuoteRanges(text: string): readonly MessageQuoteRange[] {
++  const ranges: MessageQuoteRange[] = []
++  for (const match of text.matchAll(/^ {0,3}>[^\r\n]*(?:\r?\n {0,3}>[^\r\n]*)*/gmu)) {
++    if (quoteTextOf(match[0]).trim() !== '') ranges.push({ start: match.index, end: match.index + match[0].length })
++  }
++  return ranges
++}
+diff --git a/packages/session/message-quotes/src/css-modules.d.ts b/packages/session/message-quotes/src/css-modules.d.ts
+new file mode 100644
+index 0000000000..bc5e482353
+--- /dev/null
++++ b/packages/session/message-quotes/src/css-modules.d.ts
+@@ -0,0 +1,6 @@
++declare module '*.module.css' {
++  const classes: Record<string, string>
++  export default classes
++}
++
++declare module '*.css'
+diff --git a/packages/session/message-quotes/src/index.ts b/packages/session/message-quotes/src/index.ts
+new file mode 100644
+index 0000000000..c6974f8db0
+--- /dev/null
++++ b/packages/session/message-quotes/src/index.ts
+@@ -0,0 +1,4 @@
++/** Host entry for the browser quotation plugin. */
++
++/** Register the browser entry through the plugin manifest. */
++export function apply(): void {}
+diff --git a/packages/session/message-quotes/tsconfig.json b/packages/session/message-quotes/tsconfig.json
+new file mode 100644
+index 0000000000..51efa33543
+--- /dev/null
++++ b/packages/session/message-quotes/tsconfig.json
+@@ -0,0 +1,36 @@
++{
++  "extends": "../../../tsconfig.base.client.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types"
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../../api/session-controller/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/locale/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-chat/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-conversation/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-renderer"
++    },
++    {
++      "path": "../../client/ui-slots"
++    },
++    {
++      "path": "../../client/ui-primitives"
++    }
++  ]
++}
+diff --git a/packages/session/message-quotes/tsdown.config.ts b/packages/session/message-quotes/tsdown.config.ts
+new file mode 100644
+index 0000000000..71d5bd77f8
+--- /dev/null
++++ b/packages/session/message-quotes/tsdown.config.ts
+@@ -0,0 +1,3 @@
++import { clientBundle } from '../../client/tsdown.client.ts'
++
++export default clientBundle(import.meta.dirname, ['lib/types/index.js'])
+diff --git a/tsconfig.client.json b/tsconfig.client.json
+index e8bb0d4408..66e5506a75 100644
+--- a/tsconfig.client.json
++++ b/tsconfig.client.json
+@@ -138,6 +138,7 @@
+     { "path": "./packages/client/ui-user-questions" },
+     { "path": "./packages/client/ui-trajectory" },
+     { "path": "./packages/session-query/session-log-export/tsconfig.client.json" },
++    { "path": "./packages/session/message-quotes" },
+     { "path": "./packages/client/ui-open-in-app" },
+     { "path": "./packages/client/ui-theme/tsconfig.client.json" },
+     { "path": "./packages/client/ui-settings/tsconfig.client.json" },

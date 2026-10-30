@@ -183,6 +183,11 @@ done
 rm -rf "$BAK" "$E"
 
 say ""
+if [ -d "$REPO/packages/client/ui-chat" ]; then
+  python3 "$SELF_DIR/postpatch.py" "$REPO"
+else
+  say "  !! 后处理跳过（REPO 不对）"
+fi
 say "补丁结果: 应用 $applied / 跳过 $skipped / 失败 $failed"
 if [ "$MODE" = apply ] && [ "$applied" -gt 0 ]; then
   say "提示: --3way 会把改动放进暂存区；想恢复成普通未暂存改动，执行 git -C \"$REPO\" reset -q"
@@ -198,7 +203,8 @@ if [ "$WITH_ENV" -eq 1 ]; then
 
   PENTEST="$HOME/.dsh/profiles/web/node_modules/@howmp/dsh-pentest/lib/pentest.js"
   if [ -f "$PENTEST" ]; then
-    if bash "$SELF_DIR/patch-pentest.sh" 2>&1 | sed 's/^/  /'; then :; else say "  !! pentest 补丁失败"; fi
+    if python3 "$SELF_DIR/postpatch.py" "$REPO"
+bash "$SELF_DIR/patch-pentest.sh" 2>&1 | sed 's/^/  /'; then :; else say "  !! pentest 补丁失败"; fi
   else
     say "  --  pentest 插件未安装，跳过"
   fi

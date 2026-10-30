@@ -13,3 +13,4 @@ a22918eeb64fd8eb8724863e2e2e060d5aa4fd8f859ac05ed1e7597df43fc2cf  07-sharp-wasm3
 5d86e07ec836aca86efdb5c1c64280d4bf50ab16cca34f718c3dc3382c0f3581  08-lockfile.patch  1 files
 c6e46f1805dba2e53ccd647f053132096f36e713b10bf9767b86178ac4874af1  09-web-worker-context.patch  1 files
 f1cc46d4ef32946e49ab1d6c321bf31efa9630213167764af73913217e955d53  10-config-editor-composition.patch  2 files
+c7a4cda994e24b43becd9eaaacd51010e19883aa71c93f5528abd8b5b4e51db1  11-message-quotes.patch  44 files
