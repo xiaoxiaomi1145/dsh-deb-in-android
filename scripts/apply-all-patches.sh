@@ -57,7 +57,76 @@ if [ -n "$BASE_COMMIT" ] && [ "$CUR_COMMIT" != "$BASE_COMMIT" ]; then
 fi
 
 applied=0; skipped=0; failed=0; failed_list=""
+
+if [ -n "$BASE_TAG" ] && [ -n "$BASE_COMMIT" ] && ! git -C "$REPO" cat-file -e "${BASE_COMMIT}^{commit}" 2>/dev/null; then
+  say "补全基线对象（3-way 合并需要）：$BASE_TAG"
+  if git -C "$REPO" fetch -q --depth 1 origin "+refs/tags/$BASE_TAG:refs/tags/$BASE_TAG" 2>/dev/null; then
+    say "  ok  基线对象已就位"
+  else
+    say "  --  基线对象不可得（离线或标签缺失），将改用宽松方式应用"
+  fi
+  say ""
+fi
+
 E=$(mktemp "${TMPDIR:-$PREFIX/tmp}/dsh-patch.XXXXXX") || die "无法创建临时文件"
+BAK=$(mktemp -d "${TMPDIR:-$PREFIX/tmp}/dsh-bak.XXXXXX") || die "无法创建备份目录"
+
+patch_files() { sed -n 's|^diff --git a/.* b/||p' "$1"; }
+
+snapshot() {
+  local p="$1" out="$2" f
+  rm -rf "$out"; mkdir -p "$out"
+  patch_files "$p" | while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -f "$REPO/$f" ]; then
+      mkdir -p "$out/$(dirname "$f")"
+      cp -p "$REPO/$f" "$out/$f"
+    else
+      mkdir -p "$out/$(dirname "$f")"
+      : > "$out/$f.absent"
+    fi
+  done
+}
+
+restore() {
+  local p="$1" bak="$2" f
+  patch_files "$p" | while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -f "$bak/$f" ]; then cp -p "$bak/$f" "$REPO/$f"; else rm -f "$REPO/$f"; fi
+    rm -f "$REPO/$f.rej" "$REPO/$f.orig"
+  done
+  git -C "$REPO" reset -q 2>/dev/null || true
+}
+
+verify() {
+  local unmerged
+  unmerged=$(git -C "$REPO" diff --name-only --diff-filter=U 2>/dev/null)
+  [ -z "$unmerged" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 "$SELF_DIR/verify-patch.py" --repo "$REPO" --patch "$1" >"$E" 2>&1
+}
+
+try_level() {
+  local lvl="$1" p="$2" unmerged rc
+  case "$lvl" in
+    1)
+      git -C "$REPO" apply --3way "$p" >"$E" 2>&1
+      rc=$?
+      unmerged=$(git -C "$REPO" diff --name-only --diff-filter=U 2>/dev/null)
+      if [ -n "$unmerged" ]; then
+        if command -v python3 >/dev/null 2>&1 && python3 "$SELF_DIR/auto-merge.py" --repo "$REPO" >>"$E" 2>&1; then
+          return 0
+        fi
+        return 1
+      fi
+      [ "$rc" -eq 0 ] && return 0
+      return 1 ;;
+    2) git -C "$REPO" apply -C1 --recount --ignore-whitespace "$p" >"$E" 2>&1 ;;
+    3) ( cd "$REPO" && patch -p1 --forward --batch --fuzz=3 --no-backup-if-mismatch < "$p" >"$E" 2>&1 ) ;;
+    4) python3 "$SELF_DIR/apply-fallback.py" --repo "$REPO" --group "$(basename "$p" .patch)" >"$E" 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
 
 for p in "$PATCH_DIR"/*.patch; do
   [ -e "$p" ] || continue
@@ -71,28 +140,47 @@ for p in "$PATCH_DIR"/*.patch; do
   fi
 
   if [ "$MODE" = check ]; then
-    if git -C "$REPO" apply --check --cached "$p" >/dev/null 2>"$E" || git -C "$REPO" apply --check "$p" >/dev/null 2>"$E"; then
+    if git -C "$REPO" apply --check "$p" >/dev/null 2>&1 || git -C "$REPO" apply --check --cached "$p" >/dev/null 2>&1; then
+      say "  ok  $name  可应用"
+      applied=$((applied+1))
+    elif git -C "$REPO" apply -C1 --recount --ignore-whitespace --check "$p" >/dev/null 2>&1; then
+      say "  ok  $name  可应用"
+      applied=$((applied+1))
+    elif [ -f "$SELF_DIR/apply-fallback.py" ] && python3 "$SELF_DIR/apply-fallback.py" --list 2>/dev/null | tr ' ' '\n' | grep -qx "$num"; then
       say "  ok  $name  可应用"
       applied=$((applied+1))
     else
-      say "  !!  $name  无法应用：$(head -2 "$E" | tr '\n' ' ')"
+      say "  !!  $name  无法应用"
       failed=$((failed+1)); failed_list="$failed_list $name"
     fi
     continue
   fi
 
-  if git -C "$REPO" apply --3way "$p" >"$E" 2>&1; then
-    say "  ok  $name  已应用"
-    applied=$((applied+1))
-  elif git -C "$REPO" apply --check "$p" >/dev/null 2>&1; then
-    git -C "$REPO" apply "$p" >"$E" 2>&1 && { say "  ok  $name  已应用（直接）"; applied=$((applied+1)); } \
-      || { say "  !!  $name  $(head -2 "$E" | tr '\n' ' ')"; failed=$((failed+1)); failed_list="$failed_list $name"; }
-  else
-    say "  !!  $name  冲突：$(head -3 "$E" | tr '\n' ' ')"
+  done_ok=0
+  for lvl in 1 2 3 4; do
+    if [ "$lvl" = 4 ] && [ ! -f "$SELF_DIR/apply-fallback.py" ]; then continue; fi
+    snapshot "$p" "$BAK/snap"
+    if try_level "$lvl" "$p"; then
+      if verify "$p"; then
+        case "$lvl" in
+          1) say "  ok  $name  已应用" ;;
+          2) say "  ok  $name  已应用" ;;
+          3) say "  ok  $name  已应用" ;;
+          4) say "  ok  $name  已应用" ;;
+        esac
+        applied=$((applied+1)); done_ok=1; break
+      fi
+      say "      $name L$lvl 应用后校验未通过，回滚重试" >&2
+    fi
+    restore "$p" "$BAK/snap"
+  done
+
+  if [ "$done_ok" -ne 1 ]; then
+    say "  !!  $name  无法应用或校验失败：$(tail -3 "$E" | tr '\n' ' ')"
     failed=$((failed+1)); failed_list="$failed_list $name"
   fi
 done
-rm -f "$E"
+rm -rf "$BAK" "$E"
 
 say ""
 say "补丁结果: 应用 $applied / 跳过 $skipped / 失败 $failed"
