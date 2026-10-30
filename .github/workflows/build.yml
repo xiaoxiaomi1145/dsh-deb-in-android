@@ -27,8 +27,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          up=https://api.github.com/repos/deepseek-ai/deepseek-harness/releases/latest
-          tag=$(curl -fsSL "$up" | jq -r '.tag_name // empty' || true)
+          up='https://api.github.com/repos/deepseek-ai/deepseek-harness/releases?per_page=20'
+          tag=$(curl -fsSL -H "Authorization: token $GH_TOKEN" "$up" | jq -r 'sort_by(.published_at) | reverse | .[0].tag_name // empty' || true)
           if [ -z "${tag:-}" ]; then
               tag=$(git ls-remote --tags --refs https://github.com/deepseek-ai/deepseek-harness.git | awk -F/ '{print $NF}' | sort -V | tail -1)
           fi
