@@ -1,0 +1,773 @@
+diff --git a/packages/bundle/web-app/cordis.patch.yml b/packages/bundle/web-app/cordis.patch.yml
+index 254db4f189..7b690bffde 100644
+--- a/packages/bundle/web-app/cordis.patch.yml
++++ b/packages/bundle/web-app/cordis.patch.yml
+@@ -329,6 +329,9 @@
+     - id: ui-approval
+       name: '@deepseek-ai/dsh-client-ui-approval'
+ 
++    - id: message-quotes
++      name: '@deepseek-ai/dsh-message-quotes'
++
+     - id: ui-chat
+       name: '@deepseek-ai/dsh-client-ui-chat'
+ 
+diff --git a/packages/bundle/web-app/package.json b/packages/bundle/web-app/package.json
+index 1a7ff84d0d..68beb30a6a 100644
+--- a/packages/bundle/web-app/package.json
++++ b/packages/bundle/web-app/package.json
+@@ -142,6 +142,7 @@
+     "@deepseek-ai/dsh-host-webserver": "workspace:*",
+     "@deepseek-ai/dsh-launch-environment": "workspace:*",
+     "@deepseek-ai/dsh-message-feedback": "workspace:*",
++    "@deepseek-ai/dsh-message-quotes": "workspace:*",
+     "@deepseek-ai/dsh-office-to-pdf": "workspace:*",
+     "@deepseek-ai/dsh-persona": "workspace:*",
+     "@deepseek-ai/dsh-plan-mode": "workspace:*",
+diff --git a/packages/session/message-quotes/README.i18n.yaml b/packages/session/message-quotes/README.i18n.yaml
+new file mode 100644
+index 0000000000..8d01daa025
+--- /dev/null
++++ b/packages/session/message-quotes/README.i18n.yaml
+@@ -0,0 +1,46 @@
++# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
++# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
++# After editing either side, bring the other along and re-record with:
++#   pnpm run verify-translation-pairing --write packages/session/message-quotes/README.md
++/:
++  en: 3747c4c75b3f49e0
++  zh: 5b0b9248cb91d91b
++/deepseek-ai-dsh-message-quotes:
++  en: a98d2b6bfee45c56
++  zh: 853c079ed4cdae27
++/deepseek-ai-dsh-message-quotes/summary:
++  en: a4646537fb9c8371
++  zh: d4a008fe576720c6
++/deepseek-ai-dsh-message-quotes/table-of-contents:
++  en: d152484eb41ac6b4
++  zh: 405b30feaf48c087
++/deepseek-ai-dsh-message-quotes/use-this-package:
++  en: 5a2c3edf0a026abe
++  zh: aec2f54b6d833591
++/deepseek-ai-dsh-message-quotes/understand-the-implementation:
++  en: e5c91bdecff724e5
++  zh: 655c2528d111ac32
++/deepseek-ai-dsh-message-quotes/further-exploration:
++  en: bcf07b5197b746ce
++  zh: 206f79eb606baac7
++/deepseek-ai-dsh-message-quotes/model-experience:
++  en: 215e7ba838619b7b
++  zh: a311da3843709f90
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text:
++  en: 4570ae90b328ddf5
++  zh: 5c2c95075c5e0fa4
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text/what-the-model-sees:
++  en: 913152fe14c493f6
++  zh: 3bdf114beaff1e04
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text/token-effect:
++  en: af92deb8bf69432b
++  zh: 2582520fcb9b982e
++/deepseek-ai-dsh-message-quotes/model-experience/quoted-message-text/kv-cache-effect:
++  en: 626c54bc58b74f8f
++  zh: 82a5a8a445734d64
++/deepseek-ai-dsh-message-quotes/known-limitations-and-deferred-work:
++  en: 4d2c9783f0268d55
++  zh: 40d6d48ceed3194c
++/deepseek-ai-dsh-message-quotes/known-limitations-and-deferred-work/dev-note:
++  en: e67f633dc6fe7773
++  zh: 8ec3e73528ddb1a6
+diff --git a/packages/session/message-quotes/README.md b/packages/session/message-quotes/README.md
+new file mode 100644
+index 0000000000..60ecd38894
+--- /dev/null
++++ b/packages/session/message-quotes/README.md
+@@ -0,0 +1,83 @@
++---
++description: "Quotation controls and Markdown blockquote presentation."
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-message-quotes
++
++English | [中文](README.zh.md)
++
++## Summary
++
++`dsh-message-quotes` registers quotation controls and transcript rendering on the Client. Messages retain ordinary Markdown text without quote metadata or content indexes.
++
++## Table of Contents
++
++- [Use this package](#use-this-package)
++- [Understand the implementation](#understand-the-implementation)
++- [Further Exploration](#further-exploration)
++- [Model Experience](#model-experience)
++- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
++- [Dev Note](#dev-note)
++
++-----
++
++<a id="use-this-package"></a>
++## Use this package
++
++The Web bundle mounts this plugin. Its Client entry registers the selection action with `ctx.uiConversation.interactions` and renders quotes through UserText rules. Registrations are removed when the plugin unloads. The selection button uses the shared floating-surface stroke and shadow.
++
++-----
++
++<a id="understand-the-implementation"></a>
++## Understand the implementation
++
++<details>
++<summary>Implementation internals — click to expand</summary>
++
++The shared [Markdown formatter](../../client/ui-primitives/README.md#rendering-agent-output) encodes quoted text for the composer. The plugin owns [quote recognition and decoding](src/client/quote-text.ts). Quote previews render their contents as plain text, including recognized Session labels, with uniform typography and no reference-chip decoration. Selection eligibility, local positioning, and dismissal belong to the conversation interaction service; the quote action extracts its text from the DOM. The composer owns QuoteNode editing and serialization.
++
++</details>
++
++-----
++
++<a id="further-exploration"></a>
++## Further Exploration
++
++- [Session package map](../README.md) — related persistence and projection packages.
++- [Conversation subsystem](../../../docs/subsystems/conversation.md) — composer and transcript consumers.
++
++-----
++
++<a id="model-experience"></a>
++## Model Experience
++
++### Quoted message text
++
++#### What the model sees
++
++The composer sends selected text as ordinary Markdown blockquotes, with one `> ` prefix per line. Session-reference and skill processing applies normally to quoted text.
++
++#### Token effect
++
++Quote text and its line prefixes contribute ordinary input tokens.
++
++#### KV Cache effect
++
++The plugin rewrites no history. Consumers append the encoded text as user content after the existing prefix.
++
++## Known Limitations and Deferred Work
++
++<a id="known-limitations-and-deferred-work"></a>
++
++- Recognition covers explicitly marked lines with up to three leading spaces; it does not implement Markdown lazy continuation or fenced-code parsing.
++
++<a id="dev-note"></a>
++### Dev Note
++
++<details>
++<summary>Working context for maintainers — click to expand</summary>
++
++None.
++
++</details>
+diff --git a/packages/session/message-quotes/README.zh.md b/packages/session/message-quotes/README.zh.md
+new file mode 100644
+index 0000000000..91d95c4165
+--- /dev/null
++++ b/packages/session/message-quotes/README.zh.md
+@@ -0,0 +1,83 @@
++---
++description: "提供引用控件与 Markdown blockquote 展示的插件。"
++kind: "package-reference"
++---
++
++# @deepseek-ai/dsh-message-quotes
++
++[English](README.md) | 中文
++
++## 概述
++
++`dsh-message-quotes` 在 Client 注册引用控件和转录渲染。消息保留普通 Markdown 文本，无需 quote 元数据或 content 索引。
++
++## 目录
++
++- [使用本包](#use-this-package)
++- [理解实现](#understand-the-implementation)
++- [延伸阅读](#further-exploration)
++- [模型体验](#model-experience)
++- [已知限制与后续工作](#known-limitations-and-deferred-work)
++- [开发备注](#dev-note)
++
++-----
++
++<a id="use-this-package"></a>
++## 使用本包
++
++Web bundle 挂载此插件。Client 入口向 `ctx.uiConversation.interactions` 注册选区操作，并通过 UserText 规则渲染引用。插件卸载时会移除这些注册。选区按钮使用共享浮层描边与阴影。
++
++-----
++
++<a id="understand-the-implementation"></a>
++## 理解实现
++
++<details>
++<summary>实现细节 — 点击展开</summary>
++
++输入框使用共享的 [Markdown 格式化工具](../../client/ui-primitives/README.zh.md#rendering-agent-output) 编码引用文本；插件负责[引用识别与解码](src/client/quote-text.ts)。Quote 预览将正文及已识别的 Session 标签作为纯文本呈现，统一文字样式，不展示 reference chip 装饰。选区是否可操作、原地定位与关闭由 conversation 交互服务负责；引用操作从 DOM 提取文本。输入框负责 QuoteNode 编辑和序列化。
++
++</details>
++
++-----
++
++<a id="further-exploration"></a>
++## 延伸阅读
++
++- [Session 包索引](../README.zh.md) — 相关持久化和投影包。
++- [Conversation 子系统](../../../docs/subsystems/conversation.zh.md) — 编辑器和对话呈现消费方。
++
++-----
++
++<a id="model-experience"></a>
++## 模型体验
++
++### 引用消息文本
++
++#### 模型可见内容
++
++输入框将选中文本作为普通 Markdown blockquote 发送，每行带一个 `> ` 前缀。Session-reference 与 skill 处理照常作用于引用文本。
++
++#### Token 影响
++
++引用文本及其行前缀贡献普通输入 token。
++
++#### KV Cache 影响
++
++该插件不改写历史。消费方将编码文本作为用户内容追加到现有前缀之后。
++
++## 已知限制与后续工作
++
++<a id="known-limitations-and-deferred-work"></a>
++
++- 识别范围为最多带三个前导空格的显式引用行；不实现 Markdown 懒惰续行或代码围栏解析。
++
++<a id="dev-note"></a>
++### 开发备注
++
++<details>
++<summary>维护者工作上下文 — 点击展开</summary>
++
++无。
++
++</details>
+diff --git a/packages/session/message-quotes/locale/de.json b/packages/session/message-quotes/locale/de.json
+new file mode 100644
+index 0000000000..48aa810c81
+--- /dev/null
++++ b/packages/session/message-quotes/locale/de.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Nachrichtenzitate",
++    "description": "Ausgewählten Text zitieren und als Markdown-Blockzitat anzeigen."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/en.json b/packages/session/message-quotes/locale/en.json
+new file mode 100644
+index 0000000000..dd73eca27a
+--- /dev/null
++++ b/packages/session/message-quotes/locale/en.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Message quotes",
++    "description": "Quote selected text and display it as a Markdown block quote."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/es.json b/packages/session/message-quotes/locale/es.json
+new file mode 100644
+index 0000000000..f0b791f4f2
+--- /dev/null
++++ b/packages/session/message-quotes/locale/es.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Citas de mensajes",
++    "description": "Cita el texto seleccionado y muéstralo como una cita en bloque Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/fr.json b/packages/session/message-quotes/locale/fr.json
+new file mode 100644
+index 0000000000..64b38b5a5f
+--- /dev/null
++++ b/packages/session/message-quotes/locale/fr.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Citations de messages",
++    "description": "Citez le texte sélectionné et affichez-le sous forme de citation en bloc Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/ja.json b/packages/session/message-quotes/locale/ja.json
+new file mode 100644
+index 0000000000..02a0474244
+--- /dev/null
++++ b/packages/session/message-quotes/locale/ja.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "メッセージ引用",
++    "description": "選択したテキストを引用し、Markdown の引用ブロックとして表示します。"
++  }
++}
+diff --git a/packages/session/message-quotes/locale/pt.json b/packages/session/message-quotes/locale/pt.json
+new file mode 100644
+index 0000000000..dbc3dcb4d4
+--- /dev/null
++++ b/packages/session/message-quotes/locale/pt.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Citações de mensagens",
++    "description": "Cite o texto selecionado e exiba-o como uma citação em bloco Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/ru.json b/packages/session/message-quotes/locale/ru.json
+new file mode 100644
+index 0000000000..2328853e75
+--- /dev/null
++++ b/packages/session/message-quotes/locale/ru.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Цитаты сообщений",
++    "description": "Цитируйте выделенный текст и отображайте его как блочную цитату Markdown."
++  }
++}
+diff --git a/packages/session/message-quotes/locale/zh.json b/packages/session/message-quotes/locale/zh.json
+new file mode 100644
+index 0000000000..e739f21ccf
+--- /dev/null
++++ b/packages/session/message-quotes/locale/zh.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "消息引用",
++    "description": "引用选中的文本，并用 Markdown 引用块展示。"
++  }
++}
+diff --git a/packages/session/message-quotes/package.json b/packages/session/message-quotes/package.json
+new file mode 100644
+index 0000000000..b1f5a2d178
+--- /dev/null
++++ b/packages/session/message-quotes/package.json
+@@ -0,0 +1,68 @@
++{
++  "name": "@deepseek-ai/dsh-message-quotes",
++  "description": "Selected-text quotation and Markdown blockquote presentation",
++  "version": "0.2.2-alpha.2",
++  "publishConfig": {
++    "access": "public"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
++    "directory": "packages/session/message-quotes"
++  },
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./src/*": "./src/*",
++    "./locale/*.json": "./locale/*.json",
++    "./package.json": "./package.json",
++    "./client": {
++      "types": "./lib/types/client/index.d.ts",
++      "default": "./lib/client.js"
++    }
++  },
++  "files": [
++    "locale/*.json",
++    "lib/index.js",
++    "lib/client.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "license": "MIT",
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:~"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-api-session-controller": "workspace:*",
++    "@deepseek-ai/dsh-client-locale": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-chat": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-conversation": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",
++    "react": "^18.2.0",
++    "@deepseek-ai/dsh-client-test-runtime": "workspace:*",
++    "@deepseek-ai/dsh-session": "workspace:*"
++  },
++  "dsh": {
++    "client": {
++      "inject": [
++        "@deepseek-ai/dsh-api-session-controller",
++        "@deepseek-ai/dsh-client-locale",
++        "@deepseek-ai/dsh-client-ui-chat",
++        "@deepseek-ai/dsh-client-ui-conversation",
++        "@deepseek-ai/dsh-client-ui-renderer"
++      ],
++      "platform": "web"
++    }
++  },
++  "scripts": {
++    "bundle": "tsdown",
++    "watch": "tsdown --watch"
++  }
++}
+diff --git a/packages/session/message-quotes/src/client/QuoteSelection.module.css b/packages/session/message-quotes/src/client/QuoteSelection.module.css
+new file mode 100644
+index 0000000000..66eda4cfe6
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/QuoteSelection.module.css
+@@ -0,0 +1,22 @@
++.action {
++  padding: 5px 10px;
++  border: none;
++  border-radius: 999px;
++  corner-shape: round;
++  background: var(--dsw-alias-button-floating-fill);
++  --dsw-elevation-stroke-color: var(--dsw-alias-border-l3);
++  box-shadow: var(--dsw-elevation-panel);
++  color: var(--dsw-alias-label-primary);
++  font: var(--dsw-font-xs-13);
++  cursor: pointer;
++}
++
++.action:focus-visible {
++  background: var(--dsw-alias-button-floating-hover);
++}
++
++@media (hover: hover) {
++  .action:hover {
++    background: var(--dsw-alias-button-floating-hover);
++  }
++}
+diff --git a/packages/session/message-quotes/src/client/QuoteSelection.tsx b/packages/session/message-quotes/src/client/QuoteSelection.tsx
+new file mode 100644
+index 0000000000..431628ac91
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/QuoteSelection.tsx
+@@ -0,0 +1,28 @@
++/** Quote action rendered through the Chat text-interaction Slot. */
++import { useEffect } from 'react'
++import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
++import css from './QuoteSelection.module.css'
++
++/**
++ * Render the action for a selection admitted by the Quote plugin.
++ * @param props - area-local text interaction and standard Session/composer seats.
++ * @returns the quote button after a valid selection in a writable conversation.
++ */
++export function QuoteSelectionAction({ dismiss, readText, clearSelection, inputActions, useSession, t }:
++PropsRuntime<'conversation.chat.text-interaction'> & PropsLocale<'messageQuotes'>) {
++  const enabled = useSession(s => !s.removed && (s.subagent === null
++    || (s.subagent.address.mode === 'continuable' && s.subagent.parentAvailable === true)))
++  useEffect(() => {
++    if (!enabled) dismiss()
++  }, [enabled, dismiss])
++  if (!enabled) return null
++  return <button type="button" className={css.action} aria-label={t('quote.add')}
++    onPointerDown={(event) => { event.preventDefault() }}
++    onClick={() => {
++      const text = readText()
++      if (text === null) { dismiss(); return }
++      if (!inputActions.insertQuote(text)) return
++      clearSelection()
++      dismiss()
++    }}>{t('quote.add')}</button>
++}
+diff --git a/packages/session/message-quotes/src/client/QuotedUserText.tsx b/packages/session/message-quotes/src/client/QuotedUserText.tsx
+new file mode 100644
+index 0000000000..585947d3f6
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/QuotedUserText.tsx
+@@ -0,0 +1,12 @@
++/** Literal display for text-derived quote nodes. */
++import { QuotePreview } from '@deepseek-ai/dsh-client-ui-primitives'
++import type { UserTextNodeProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
++
++/**
++ * Display decoded quote text without further interpretation.
++ * @param props - the quote node produced by the registered blockquote matcher.
++ * @returns the shared literal excerpt and clipped full-text popover.
++ */
++export function QuotedUserText({ node }: UserTextNodeProps<'quote'>) {
++  return <QuotePreview text={node.data.text} />
++}
+diff --git a/packages/session/message-quotes/src/client/index.ts b/packages/session/message-quotes/src/client/index.ts
+new file mode 100644
+index 0000000000..e7a9348052
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/index.ts
+@@ -0,0 +1,53 @@
++/** Quote selection actions and literal UserText excerpts registered by the browser plugin. */
++import type { Context } from '@deepseek-ai/cordis'
++import type {} from '@deepseek-ai/dsh-api-session-controller/client'
++import type {} from '@deepseek-ai/dsh-client-locale/client'
++import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
++import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
++import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
++import { QuoteSelectionAction } from './QuoteSelection.tsx'
++import { QuotedUserText } from './QuotedUserText.tsx'
++import { quoteRule } from './quote-rule.ts'
++import { en, ja, es, fr, de, ru, pt, NS, zh, type MessageQuotesKey } from './locales.ts'
++
++export type {} from './quote-rule.ts'
++
++declare module '@deepseek-ai/dsh-client-ui-slots' {
++  interface LocaleNamespaceMap {
++    /** Quote selection action copy. */
++    messageQuotes: MessageQuotesKey
++  }
++}
++
++/** Browser plugin name. */
++export const name = 'message-quotes'
++
++/** Services needed to admit selections and register Quote presentation. */
++export const inject = ['slots', 'locale', 'sessions', 'uiConversation']
++
++/**
++ * Register Quote admission, its action surface, and literal UserText rendering.
++ * @param ctx - Client root context owning every Quote contribution.
++ */
++export function apply(ctx: Context): void {
++  ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, ru, pt }), 'message-quotes: dictionaries')
++  ctx.effect(() => ctx.uiConversation.userText.register(quoteRule), 'message-quotes: UserText rule')
++  ctx.effect(() => ctx.uiConversation.interactions.register({
++    id: 'quote',
++    onInteraction(request) {
++      if (request.trigger !== 'selection' || request.readText() === null) return
++      const binding = ctx.sessions.binding(request.sessionId)
++      if (binding === undefined) return
++      const session = binding.session.getSnapshot()
++      if (session.removed || (session.subagent !== null
++        && (session.subagent.address.mode !== 'continuable' || session.subagent.parentAvailable !== true))) return
++      request.open()
++    },
++  }), 'message-quotes: selection interaction')
++  ctx.slots.inject('conversation.chat.text-interaction', () => ctx.slots.register({
++    name: 'conversation.chat.text-interaction', key: 'quote', locale: NS,
++  }, QuoteSelectionAction))
++  ctx.slots.inject('conversation.user.text.node', () => ctx.slots.register({
++    name: 'conversation.user.text.node', key: 'quote', priority: 100,
++  }, QuotedUserText))
++}
+diff --git a/packages/session/message-quotes/src/client/locales.ts b/packages/session/message-quotes/src/client/locales.ts
+new file mode 100644
+index 0000000000..4d704e803e
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/locales.ts
+@@ -0,0 +1,47 @@
++/** Copy owned by the Quote interaction plugin. */
++
++/** Quote plugin dictionary namespace. */
++export const NS = 'messageQuotes'
++
++/** Simplified Chinese dictionary and key source. */
++export const zh = {
++  'quote.add': '引用文本',
++}
++
++/** Supported Quote interaction copy keys. */
++export type MessageQuotesKey = keyof typeof zh
++
++/** English dictionary. */
++export const en: Record<MessageQuotesKey, string> = {
++  'quote.add': 'Quote text',
++}
++
++/** Japanese dictionary. */
++export const ja = {
++  'quote.add': 'テキストを引用',
++} satisfies Record<MessageQuotesKey, string>
++
++/** Spanish dictionary, checked against the English keys. */
++export const es = {
++  'quote.add': 'Texto de cotización',
++} satisfies Record<keyof typeof en, string>
++
++/** French dictionary, checked against the English keys. */
++export const fr = {
++  'quote.add': 'Texte de citation',
++} satisfies Record<keyof typeof en, string>
++
++/** German dictionary, checked against the English keys. */
++export const de = {
++  'quote.add': 'Zitattext',
++} satisfies Record<keyof typeof en, string>
++
++/** Russian dictionary, checked against the English keys. */
++export const ru = {
++  'quote.add': 'Текст цитаты',
++} satisfies Record<keyof typeof en, string>
++
++/** Portuguese dictionary, checked against the English keys. */
++export const pt = {
++  'quote.add': 'Citação de texto',
++} satisfies Record<keyof typeof en, string>
+diff --git a/packages/session/message-quotes/src/client/quote-rule.ts b/packages/session/message-quotes/src/client/quote-rule.ts
+new file mode 100644
+index 0000000000..9a03cd9a5d
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/quote-rule.ts
+@@ -0,0 +1,29 @@
++/** Markdown blockquotes produce atomic quote nodes and inline separator replacements. */
++import { messageQuoteRanges, quoteTextOf } from './quote-text.ts'
++import type { UserTextRule } from '@deepseek-ai/dsh-client-ui-conversation/client'
++
++declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
++  interface UserTextDataMap {
++    quote: { readonly text: string }
++  }
++}
++
++/** Recognize blockquote lines and display adjacent paragraph separators as inline spaces. */
++export const quoteRule: UserTextRule<'quote'> = {
++  id: 'quote',
++  order: -10,
++  match(text, from) {
++    for (const range of messageQuoteRanges(text)) {
++      for (const start of [range.start - 2, range.start, range.end]) {
++        if (start < from) continue
++        if (start === range.start) {
++          return { id: 'quote', start, end: range.end, data: { text: quoteTextOf(text.slice(start, range.end)) } }
++        }
++        if (text.slice(start, start + 2) === '\n\n') {
++          return { id: 'text', start, end: start + 2, data: { text: '\n\n', display: ' ' } }
++        }
++      }
++    }
++    return undefined
++  },
++}
+diff --git a/packages/session/message-quotes/src/client/quote-text.ts b/packages/session/message-quotes/src/client/quote-text.ts
+new file mode 100644
+index 0000000000..ac9768e9b9
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/quote-text.ts
+@@ -0,0 +1,29 @@
++/** Explicit blockquote recognition and decoding for quote presentation. */
++
++/**
++ * Remove one blockquote marker from each explicitly quoted line.
++ * @param text - consecutive blockquote lines, with up to three leading spaces.
++ * @returns excerpt text with original line endings normalized.
++ */
++export function quoteTextOf(text: string): string {
++  return text.replace(/\r\n?/gu, '\n').replace(/^ {0,3}>[ \t]?/gmu, '')
++}
++
++/** One blockquote span in original UTF-16 text, excluding its trailing line break. */
++export interface MessageQuoteRange {
++  readonly start: number
++  readonly end: number
++}
++
++/**
++ * Recognize consecutive explicitly marked Markdown blockquote lines.
++ * @param text - complete original message text.
++ * @returns ordered nonblank quote spans; inline greater-than signs remain ordinary text.
++ */
++export function messageQuoteRanges(text: string): readonly MessageQuoteRange[] {
++  const ranges: MessageQuoteRange[] = []
++  for (const match of text.matchAll(/^ {0,3}>[^\r\n]*(?:\r?\n {0,3}>[^\r\n]*)*/gmu)) {
++    if (quoteTextOf(match[0]).trim() !== '') ranges.push({ start: match.index, end: match.index + match[0].length })
++  }
++  return ranges
++}
+diff --git a/packages/session/message-quotes/src/css-modules.d.ts b/packages/session/message-quotes/src/css-modules.d.ts
+new file mode 100644
+index 0000000000..bc5e482353
+--- /dev/null
++++ b/packages/session/message-quotes/src/css-modules.d.ts
+@@ -0,0 +1,6 @@
++declare module '*.module.css' {
++  const classes: Record<string, string>
++  export default classes
++}
++
++declare module '*.css'
+diff --git a/packages/session/message-quotes/src/index.ts b/packages/session/message-quotes/src/index.ts
+new file mode 100644
+index 0000000000..c6974f8db0
+--- /dev/null
++++ b/packages/session/message-quotes/src/index.ts
+@@ -0,0 +1,4 @@
++/** Host entry for the browser quotation plugin. */
++
++/** Register the browser entry through the plugin manifest. */
++export function apply(): void {}
+diff --git a/packages/session/message-quotes/tsconfig.json b/packages/session/message-quotes/tsconfig.json
+new file mode 100644
+index 0000000000..51efa33543
+--- /dev/null
++++ b/packages/session/message-quotes/tsconfig.json
+@@ -0,0 +1,36 @@
++{
++  "extends": "../../../tsconfig.base.client.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types"
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../../api/session-controller/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/locale/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-chat/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-conversation/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-renderer"
++    },
++    {
++      "path": "../../client/ui-slots"
++    },
++    {
++      "path": "../../client/ui-primitives"
++    }
++  ]
++}
+diff --git a/packages/session/message-quotes/tsdown.config.ts b/packages/session/message-quotes/tsdown.config.ts
+new file mode 100644
+index 0000000000..71d5bd77f8
+--- /dev/null
++++ b/packages/session/message-quotes/tsdown.config.ts
+@@ -0,0 +1,3 @@
++import { clientBundle } from '../../client/tsdown.client.ts'
++
++export default clientBundle(import.meta.dirname, ['lib/types/index.js'])
+diff --git a/tsconfig.client.json b/tsconfig.client.json
+index e8bb0d4408..66e5506a75 100644
+--- a/tsconfig.client.json
++++ b/tsconfig.client.json
+@@ -138,6 +138,7 @@
+     { "path": "./packages/client/ui-user-questions" },
+     { "path": "./packages/client/ui-trajectory" },
+     { "path": "./packages/session-query/session-log-export/tsconfig.client.json" },
++    { "path": "./packages/session/message-quotes" },
+     { "path": "./packages/client/ui-open-in-app" },
+     { "path": "./packages/client/ui-theme/tsconfig.client.json" },
+     { "path": "./packages/client/ui-settings/tsconfig.client.json" },

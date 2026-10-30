@@ -83,6 +83,12 @@ emit 10-config-editor-composition "配置编辑器：每行配置只合并一次
   packages/boot/config-editor/src/index.ts \
   packages/settings/settings/tests/configuration-inheritance.spec.ts
 
+emit 11-message-quotes "从 0.2.2-alpha.2 移植 message-quotes（引用与选区报价）" \
+  packages/session/message-quotes \
+  packages/bundle/web-app/package.json \
+  packages/bundle/web-app/cordis.patch.yml \
+  tsconfig.client.json
+
 {
   echo "base_tag=$BASE_TAG"
   echo "base_commit=$BASE_COMMIT"
