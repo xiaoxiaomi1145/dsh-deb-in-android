@@ -1,5 +1,5 @@
 diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
-index 0cc11fa03b..bcf84dd99f 100644
+index a6e3da2..5115cb4 100644
 --- a/packages/fs/fs-local/src/fsio.ts
 +++ b/packages/fs/fs-local/src/fsio.ts
 @@ -6,8 +6,8 @@
@@ -40,9 +40,9 @@ index 0cc11fa03b..bcf84dd99f 100644
 +  copyFileExclusive?: (existingPath: string, newPath: string) => Promise<void>
    /** Override target inspection after guarded publication fails. */
    inspectPublicationTarget?: (path: string) => Promise<BigIntStats>
-   /** Override staging-directory removal for commit-point failure coverage. */
-@@ -584,6 +598,50 @@ async function throwGuardedCreateFailure(
-   throw new FsError(`cannot write "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
+   /** Observe the final cancellable checkpoint before delete or move commits. */
+@@ -598,6 +612,50 @@ function writeIoError(path: string, error: unknown): unknown {
+   return error
  }
  
 +/**
@@ -92,7 +92,7 @@ index 0cc11fa03b..bcf84dd99f 100644
  /**
   * Atomically replace a file through a private, synced staging file in the same directory.
   * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
-@@ -620,6 +678,8 @@ export async function writeFileAtomic(
+@@ -638,6 +696,8 @@ export async function writeFileAtomic(
    const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
    const replaceFile = internals.replaceFile ?? replaceFileWin32
    const linkFile = internals.linkFile ?? link
@@ -101,28 +101,28 @@ index 0cc11fa03b..bcf84dd99f 100644
    const inspectPublicationTarget = internals.inspectPublicationTarget
      ?? (path => lstat(path, { bigint: true }))
    const removeStagingDir = internals.removeStagingDir
-@@ -645,11 +705,14 @@ export async function writeFileAtomic(
+@@ -663,11 +723,14 @@ export async function writeFileAtomic(
  
      throwIfAborted(signal, 'write')
-     if (createIfAbsent !== undefined) {
+     if (options.createIfAbsent) {
 -      try {
 -        await linkFile(tempPath, absolutePath)
 -      } catch (error: unknown) {
--        await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget)
+-        await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget)
 -      }
 +      await publishGuardedCreate(
 +        linkFile,
 +        copyFileExclusive,
 +        tempPath,
 +        absolutePath,
-+        createIfAbsent.displayPath,
++        displayPath,
 +        inspectPublicationTarget,
 +      )
-     } else if (platform === 'win32' && mode !== undefined) {
+     } else if (platform === 'win32' && existingDestination) {
        try {
          await replaceFile(absolutePath, tempPath)
 diff --git a/packages/fs/fs-local/tests/fsio.spec.ts b/packages/fs/fs-local/tests/fsio.spec.ts
-index 40ed836309..83098489bc 100644
+index e53e1e4..af15ae4 100644
 --- a/packages/fs/fs-local/tests/fsio.spec.ts
 +++ b/packages/fs/fs-local/tests/fsio.spec.ts
 @@ -6,7 +6,8 @@
@@ -160,7 +160,7 @@ index 40ed836309..83098489bc 100644
 +        copied = true
 +        await copyFile(source, target, constants.COPYFILE_EXCL)
 +      },
-+    }, { displayPath: file })
++    }, { displayPath: file, createIfAbsent: true })
 +
 +    expect(copied).toBe(true)
 +    expect(await readFile(file, 'utf8')).toBe('ours')
@@ -173,7 +173,7 @@ index 40ed836309..83098489bc 100644
 +
 +    await writeFileAtomic(file, 'ours', undefined, undefined, {
 +      linkFile: async () => { throw denied },
-+    }, { displayPath: file })
++    }, { displayPath: file, createIfAbsent: true })
 +
 +    expect(await readFile(file, 'utf8')).toBe('ours')
 +  })
@@ -184,9 +184,9 @@ index 40ed836309..83098489bc 100644
  
      await expect(writeFileAtomic(file, 'ours', undefined, undefined, {
        linkFile: async () => { throw denied },
--    }, { displayPath: file })).rejects.toMatchObject({ code: 'FS_IO_ERROR', cause: denied })
+-    }, { displayPath: file, createIfAbsent: true })).rejects.toMatchObject({ code: 'FS_IO_ERROR', cause: denied })
 +      copyFileExclusive: async () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }) },
-+    }, { displayPath: file })).rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
++    }, { displayPath: file, createIfAbsent: true })).rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
      await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
      expect((await readdir(dir)).filter(name => name.includes('.tmp'))).toEqual([])
    })
@@ -199,7 +199,7 @@ index 40ed836309..83098489bc 100644
 +    await expect(writeFileAtomic(file, 'ours', undefined, undefined, {
 +      linkFile: async () => { throw denied },
 +      copyFileExclusive: async () => { throw copyFault },
-+    }, { displayPath: file })).rejects.toMatchObject({ code: 'FS_IO_ERROR', cause: copyFault })
++    }, { displayPath: file, createIfAbsent: true })).rejects.toMatchObject({ code: 'FS_IO_ERROR', cause: copyFault })
 +    expect((await readdir(dir)).filter(name => name.includes('.tmp'))).toEqual([])
 +  })
 +
@@ -207,7 +207,7 @@ index 40ed836309..83098489bc 100644
      const file = join(dir, 'a.txt')
      const linkFailure = Object.assign(new Error('link failed'), { code: 'EIO' })
 diff --git a/packages/fs/tool-fs-search/src/search-core.ts b/packages/fs/tool-fs-search/src/search-core.ts
-index 794a5d43fe..14ef8b71d1 100644
+index 794a5d4..14ef8b7 100644
 --- a/packages/fs/tool-fs-search/src/search-core.ts
 +++ b/packages/fs/tool-fs-search/src/search-core.ts
 @@ -19,8 +19,8 @@
@@ -304,7 +304,7 @@ index 794a5d43fe..14ef8b71d1 100644
    return rgPathPromise
  }
 diff --git a/packages/fs/tool-fs-search/tests/rg-path.spec.ts b/packages/fs/tool-fs-search/tests/rg-path.spec.ts
-index 7369ef521c..96f08ee8d1 100644
+index 7369ef5..96f08ee 100644
 --- a/packages/fs/tool-fs-search/tests/rg-path.spec.ts
 +++ b/packages/fs/tool-fs-search/tests/rg-path.spec.ts
 @@ -1,27 +1,47 @@
@@ -395,7 +395,7 @@ index 7369ef521c..96f08ee8d1 100644
 +  })
  })
 diff --git a/packages/fs/tool-fs-search/tests/tools.spec.ts b/packages/fs/tool-fs-search/tests/tools.spec.ts
-index 5763aacc15..22f0269efc 100644
+index 5763aac..22f0269 100644
 --- a/packages/fs/tool-fs-search/tests/tools.spec.ts
 +++ b/packages/fs/tool-fs-search/tests/tools.spec.ts
 @@ -24,7 +24,6 @@ import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH, type ToolExecution, type Too

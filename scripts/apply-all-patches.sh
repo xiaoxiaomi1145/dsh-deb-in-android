@@ -134,6 +134,10 @@ for p in "$PATCH_DIR"/*.patch; do
   num="${name%%-*}"
   case "$SKIP" in *",$num,"*) say "  --  $name  跳过(--skip)"; skipped=$((skipped+1)); continue ;; esac
 
+  if [ -f "$PATCH_DIR/$name.skip-if" ] && [ -e "$REPO/$(sed -n '1p' "$PATCH_DIR/$name.skip-if")" ]; then
+    say "  --  $name  跳过（上游已包含：$(sed -n '1p' "$PATCH_DIR/$name.skip-if")）"; skipped=$((skipped+1)); continue
+  fi
+
   if git -C "$REPO" apply -R --check "$p" >/dev/null 2>&1; then
     say "  ok  $name  （已应用，跳过）"
     skipped=$((skipped+1)); continue

@@ -1,11 +1,11 @@
-base_tag=dsh-v0.2.2-alpha.2
-base_commit=f3803c96974ad4a94195fb97e5c637e9c2a3afe3
-generated=2026-10-29T01:42:58+08:00
+base_tag=dsh-v0.2.2-rc.1
+base_commit=66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db
+generated=2026-11-06T22:05:00+08:00
 repo=/data/data/com.termux/files/usr/tmp/wt-022
 
 24b51da2bec3e13f51141f42bada9aa969c8a254c12fef268e1f2bebdd78837a  01-plugin-manager-hang.patch  3 files
 de2306ddb8907ca51f942053bc3a9e9e6a1eb82a5a15b5a5796a5d41ced021b6  02-telemetry-rows.patch  4 files
-1683429d43ef44bd5ed69cd80e5419ca023619f9a6fa81ac668349dfc6e9b90e  03-termux-fs.patch  5 files
+fce05a2ab8f0a252b6cbe58edf5eb500714b3529ef85a92d78653eefe4c6b636  03-termux-fs.patch  5 files
 e2fb1591095a10ba5bc268437e2906ff10f05daf293d0b8971625ccc456a686d  04-session-jsonl.patch  2 files
 c40e45997cfe800a9718bf1dcea4988fe9829da9af1b0d4da4d843286541fa61  05-native-android.patch  4 files
 097d56a9b03d3955c9c88f5d2ea777fe95186c83407ab9a975936d27bc0afd15  06-perf-misc.patch  4 files
