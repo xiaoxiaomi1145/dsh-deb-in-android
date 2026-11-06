@@ -23,13 +23,12 @@ printf 'TAG=%s\nVER=%s\n' "$TAG" "$VER" > "$ROOT/dist/.ci-vars"
 echo "镜像: $IMAGE"
 echo "版本: $TAG / $VER"
 
-docker run --rm -i \
-  -v "$ROOT:/builder" \
-  -w /builder \
-  "$IMAGE" bash -s <<'INNER'
+SCRIPT="$ROOT/.ci-inner.sh"
+cat > "$SCRIPT" <<'INNER'
 set -e
 export PATH="${PREFIX:-/data/data/com.termux/files/usr}/bin:$PATH"
 export COREPACK_ENABLE_STRICT=0
+export DEBIAN_FRONTEND=noninteractive
 MIRROR="${TERMUX_MIRROR:-https://packages.termux.dev}"
 printf 'deb %s/apt/termux-main stable main\n' "$MIRROR" > "$PREFIX/etc/apt/sources.list"
 mkdir -p "$PREFIX/etc/apt/sources.list.d"
@@ -48,9 +47,9 @@ echo "TAG=$TAG VER=$VER"
 if touch /builder/dist/.wtest 2>/dev/null; then echo "dist: writable"; rm -f /builder/dist/.wtest; else echo "dist: NOT writable"; fi
 df -h / | tail -2
 
-pkg update -y
-pkg upgrade -y || apt full-upgrade -y || true
-pkg install -y nodejs-lts git python clang make cmake pkg-config libvips libicu dpkg tar xz-utils coreutils ca-certificates
+pkg update -y </dev/null
+pkg upgrade -y </dev/null || apt full-upgrade -y </dev/null || true
+pkg install -y </dev/null nodejs-lts git python clang make cmake pkg-config libvips libicu dpkg tar xz-utils coreutils ca-certificates
 node -v
 
 npm i -g pnpm@11.28.5 node-gyp --silent || true
@@ -166,5 +165,10 @@ REPO="$SRC" WORK=/builder/dist bash /builder/scripts/build-all.sh --skip-install
 
 ls -l /builder/dist
 INNER
+
+docker run --rm \
+  -v "$ROOT:/builder" \
+  -w /builder \
+  "$IMAGE" bash /builder/.ci-inner.sh </dev/null
 
 ls -l "$ROOT/dist"/*.deb

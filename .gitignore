@@ -4,3 +4,4 @@ node_modules/
 *.deb
 *.log
 .ci/
+.ci-inner.sh
