@@ -37,6 +37,12 @@ mkdir -p "$PREFIX/etc/apt/sources.list.d"
 echo "apt 源: $(cat "$PREFIX/etc/apt/sources.list")"
 echo "额外源数量: $(ls "$PREFIX/etc/apt/sources.list.d" | wc -l)"
 export TERMUX_PKG_NO_MIRROR_SELECT=1
+mkdir -p "$PREFIX/etc/apt/apt.conf.d"
+cat > "$PREFIX/etc/apt/apt.conf.d/99ci-noninteractive" <<'APTCONF'
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+APT::Get::Assume-Yes "true";
+APT::Get::allow-downgrades "true";
+APTCONF
 
 echo "== 容器 =="
 uname -m
