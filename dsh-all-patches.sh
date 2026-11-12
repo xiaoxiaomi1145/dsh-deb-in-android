@@ -299,7 +299,7 @@ NODE
 DSH_EOF_2
 cat > "$TMP/patches/01-plugin-manager-hang.patch" <<'DSH_EOF_3'
 diff --git a/apps/cli/src/plugin.ts b/apps/cli/src/plugin.ts
-index baad6e32f5..a3be62887e 100644
+index baad6e3..a3be628 100644
 --- a/apps/cli/src/plugin.ts
 +++ b/apps/cli/src/plugin.ts
 @@ -88,6 +88,13 @@ export async function runPlugin(profile: string, args: readonly string[], packag
@@ -335,7 +335,7 @@ index baad6e32f5..a3be62887e 100644
    if (result.exitCode !== 0 && args.some(argument => /^git\+|^github:|\.git(?:#|$)/.test(argument))) {
      process.stderr.write(`dsh: git-hosted plugins build on install via their prepare script, which pnpm blocks until allowed — add the exact key pnpm printed above under allowBuilds in ${join(resolveProfileDir(profile), 'pnpm-workspace.yaml')}, then re-run\n`)
 diff --git a/packages/boot/plugin-manager/src/operations.ts b/packages/boot/plugin-manager/src/operations.ts
-index e7b761ad3c..545c5e2ccf 100644
+index 945c20d..6776b3a 100644
 --- a/packages/boot/plugin-manager/src/operations.ts
 +++ b/packages/boot/plugin-manager/src/operations.ts
 @@ -16,6 +16,7 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
@@ -368,18 +368,16 @@ index e7b761ad3c..545c5e2ccf 100644
     */
    idleTimeoutMs?: number
    /** Bound on the pre-install registry lookup, in milliseconds; without one a fixed bound applies. */
-@@ -288,9 +288,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
-  * @param args Pnpm arguments, before relative path anchoring.
-  * @param options Output, activation and cancellation policy.
-  * @returns Exit status, whether the silence bound stopped the run, and the diagnostic path.
-- * A compatibility denial returns exit code 1. Service output is bounded; CLI output uses inherited descriptors.
-- * Unsupported Host activation returns exit code 1 with named diagnostics; installed dependencies remain,
-- * and no bundle selection changes are saved. Other reconciliation or filesystem errors reject.
-+ * A compatibility denial returns exit code 1. Every run captures output; a CLI run forwards it through `onOutput`.
+@@ -299,7 +299,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
+  * A compatibility or `expected` denial returns exit code 1 and names what it refused.
+  * Unsupported Host activation returns exit code 1 with named diagnostics; installed dependencies remain,
+  * and no bundle selection changes are saved. Other reconciliation or filesystem errors reject.
+- * Service output is bounded; CLI output uses inherited descriptors.
++ * Every run captures output; a CLI run forwards it through `onOutput`.
   * The diagnostic file is closed on return or rejection, including preparation and spawn failures.
   */
  export async function runProfilePnpm(
-@@ -362,14 +360,19 @@ export async function runProfilePnpm(
+@@ -379,14 +379,19 @@ export async function runProfilePnpm(
    }
    if (preflight.length > 0) return await rejected(preflight, 'nothing was installed')
    const cancellation = new AbortController()
@@ -404,7 +402,7 @@ index e7b761ad3c..545c5e2ccf 100644
      killDescendants: options.execution === 'service',
      buffer: false, stdin: options.execution === 'cli' ? 'inherit' : 'ignore', cancelSignal: options.signal === undefined
        ? cancellation.signal : AbortSignal.any([cancellation.signal, options.signal]),
-@@ -384,13 +387,14 @@ export async function runProfilePnpm(
+@@ -401,13 +406,14 @@ export async function runProfilePnpm(
    /** The first failure a reading hit before that cut, which the run still reports. */
    let failure: Error | undefined
    let idleTimer: NodeJS.Timeout | undefined
@@ -420,7 +418,7 @@ index e7b761ad3c..545c5e2ccf 100644
        child.kill()
      }, options.idleTimeoutMs)
    }
-@@ -421,8 +425,8 @@ export async function runProfilePnpm(
+@@ -438,8 +444,8 @@ export async function runProfilePnpm(
    // The drain decides whether a failure surfaces, so each reading is claimed now:
    // an unclaimed rejection would be reported as unhandled while the pipes drain.
    for (const collector of collectors) void collector.catch(() => { /* reported through `failure` and the settled readings */ })
@@ -431,10 +429,10 @@ index e7b761ad3c..545c5e2ccf 100644
    if (collectors.length > 0) armIdle()
    let exitCode: number
    try {
-@@ -551,6 +555,11 @@ export async function runProfilePnpm(
-   return {
+@@ -585,6 +591,11 @@ export async function runProfilePnpm(
      exitCode, output: output.toString('utf8'), truncated, logPath,
      ...control.stalled ? { timedOut: true } : {}, ...incompatible.length > 0 ? { incompatible } : {},
+     ...unmet === undefined ? {} : { unmet },
 +    // Every run now captures its tail, so a caller that only has this result can
 +    // still say what failed instead of reporting an unclassified failure.
 +    ...exitCode === 0 && !control.stalled ? {} : { kind: classifyInstallFailure({
@@ -444,10 +442,10 @@ index e7b761ad3c..545c5e2ccf 100644
  }
  
 diff --git a/packages/boot/plugin-manager/tests/operations.spec.ts b/packages/boot/plugin-manager/tests/operations.spec.ts
-index c54260d214..6e5adfdc53 100644
+index 3f1a30d..150bb20 100644
 --- a/packages/boot/plugin-manager/tests/operations.spec.ts
 +++ b/packages/boot/plugin-manager/tests/operations.spec.ts
-@@ -939,16 +939,27 @@ it.each(['cli', 'service'] as const)('uses the %s environment and interaction po
+@@ -1041,16 +1041,27 @@ it.each(['cli', 'service'] as const)('uses the %s environment and interaction po
    const options = command.run.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv; stdin: string; stdout: string; stderr: string }
    for (const name of names) expect(options.env[name]).toBe(execution === 'cli' ? 'fixture-credential' : undefined)
    expect(options.stdin).toBe(execution === 'cli' ? 'inherit' : 'ignore')
@@ -756,7 +754,7 @@ index 48f2e4456c..a7c2ead746 100644
 DSH_EOF_4
 cat > "$TMP/patches/03-termux-fs.patch" <<'DSH_EOF_5'
 diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
-index a6e3da2..5115cb4 100644
+index c695912..5f104d7 100644
 --- a/packages/fs/fs-local/src/fsio.ts
 +++ b/packages/fs/fs-local/src/fsio.ts
 @@ -6,8 +6,8 @@
@@ -789,7 +787,7 @@ index a6e3da2..5115cb4 100644
  /**
   * A path component that is expected to be a directory is a regular file (e.g.
   * resolving `afile/child.txt` when `afile` is a file). Like `ENOENT`, the target
-@@ -94,6 +106,8 @@ export interface FsIoInternals {
+@@ -93,6 +105,8 @@ export interface FsIoInternals {
    replaceFile?: (replaced: string, replacement: string) => Promise<void>
    /** Override the hard-link no-replace publication boundary. */
    linkFile?: (existingPath: string, newPath: string) => Promise<void>
@@ -798,7 +796,7 @@ index a6e3da2..5115cb4 100644
    /** Override target inspection after guarded publication fails. */
    inspectPublicationTarget?: (path: string) => Promise<BigIntStats>
    /** Observe the final cancellable checkpoint before delete or move commits. */
-@@ -598,6 +612,50 @@ function writeIoError(path: string, error: unknown): unknown {
+@@ -584,6 +598,50 @@ function writeIoError(path: string, error: unknown): unknown {
    return error
  }
  
@@ -849,7 +847,7 @@ index a6e3da2..5115cb4 100644
  /**
   * Atomically replace a file through a private, synced staging file in the same directory.
   * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
-@@ -638,6 +696,8 @@ export async function writeFileAtomic(
+@@ -624,6 +682,8 @@ export async function writeFileAtomic(
    const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
    const replaceFile = internals.replaceFile ?? replaceFileWin32
    const linkFile = internals.linkFile ?? link
@@ -858,7 +856,7 @@ index a6e3da2..5115cb4 100644
    const inspectPublicationTarget = internals.inspectPublicationTarget
      ?? (path => lstat(path, { bigint: true }))
    const removeStagingDir = internals.removeStagingDir
-@@ -663,11 +723,14 @@ export async function writeFileAtomic(
+@@ -649,11 +709,14 @@ export async function writeFileAtomic(
  
      throwIfAborted(signal, 'write')
      if (options.createIfAbsent) {
@@ -879,7 +877,7 @@ index a6e3da2..5115cb4 100644
        try {
          await replaceFile(absolutePath, tempPath)
 diff --git a/packages/fs/fs-local/tests/fsio.spec.ts b/packages/fs/fs-local/tests/fsio.spec.ts
-index e53e1e4..af15ae4 100644
+index 6c73790..86d674b 100644
 --- a/packages/fs/fs-local/tests/fsio.spec.ts
 +++ b/packages/fs/fs-local/tests/fsio.spec.ts
 @@ -6,7 +6,8 @@
@@ -892,7 +890,7 @@ index e53e1e4..af15ae4 100644
  import { tmpdir } from 'node:os'
  import { isAbsolute, join, parse, relative, resolve } from 'node:path'
  import { createServer } from 'node:net'
-@@ -822,16 +823,69 @@ describe('writeFileAtomic — temp-file safety', () => {
+@@ -824,16 +825,69 @@ describe('writeFileAtomic — temp-file safety', () => {
    })
  
    it('maps a non-collision guarded-create publication failure and cleans staging', async () => {
@@ -963,103 +961,6 @@ index e53e1e4..af15ae4 100644
    it('maps a guarded-create target-inspection failure and cleans staging', async () => {
      const file = join(dir, 'a.txt')
      const linkFailure = Object.assign(new Error('link failed'), { code: 'EIO' })
-diff --git a/packages/fs/tool-fs-search/src/search-core.ts b/packages/fs/tool-fs-search/src/search-core.ts
-index 794a5d4..14ef8b7 100644
---- a/packages/fs/tool-fs-search/src/search-core.ts
-+++ b/packages/fs/tool-fs-search/src/search-core.ts
-@@ -19,8 +19,8 @@
-  * @module @deepseek-ai/dsh-tool-fs-search/search-core
-  */
- 
--import { existsSync } from 'node:fs'
--import { isAbsolute, join, parse, relative, sep } from 'node:path'
-+import { accessSync, constants, existsSync, statSync } from 'node:fs'
-+import { delimiter, isAbsolute, join, parse, relative, sep } from 'node:path'
- import type { Context } from '@deepseek-ai/cordis'
- import { HarnessError } from '@deepseek-ai/dsh-llm'
- import { ItemRetainer, TextRetainer } from '@deepseek-ai/dsh-output-retention'
-@@ -157,16 +157,48 @@ function completeStdout(toolName: string, stdout: SubprocessOutputRead, rawOutpu
- let rgPathPromise: Promise<string> | undefined
- 
- /**
-- * The packaged ripgrep binary path, resolved lazily once per process.
-+ * Locate a usable `rg` on the ambient `PATH`.
-+ *
-+ * This is the last resolution tier: a platform whose ABI has no published
-+ * `@vscode/ripgrep-<platform>-<arch>` package (notably Android/Termux, where
-+ * `process.platform` is `'android'` while the runtime is Linux/arm64) can
-+ * still run the packaged search tools when a system ripgrep is installed.
-+ * Candidates are probed with `accessSync(X_OK)` so a non-executable or
-+ * directory entry is skipped rather than handed to `spawn`.
-+ *
-+ * @returns the first executable `rg` on `PATH`, or `undefined` when none exists.
-+ */
-+function findSystemRg(): string | undefined {
-+  const directories = (process.env.PATH ?? '').split(delimiter).filter((entry) => entry !== '')
-+  const names = process.platform === 'win32' ? ['rg.exe', 'rg'] : ['rg']
-+  for (const directory of directories) {
-+    for (const name of names) {
-+      const candidate = join(directory, name)
-+      try {
-+        if (!statSync(candidate).isFile()) continue
-+        accessSync(candidate, constants.X_OK)
-+        return candidate
-+      } catch {
-+        // Not an executable file here; keep scanning the remaining directories.
-+      }
-+    }
-+  }
-+  return undefined
-+}
-+
-+/**
-+ * The ripgrep binary path, resolved lazily once per process.
-  *
-  * A single-file runtime uses the executable's `-rg` sidecar because a native
-  * helper cannot be spawned from pkg's virtual filesystem. Node-mode builds
-- * fall back to the platform package selected by `@vscode/ripgrep`. Resolving
-- * at the call boundary keeps a missing or corrupt binary at the first search
-- * call as `SEARCH_FAILED`, rather than failing the Loader composition.
-+ * fall back to the platform package selected by `@vscode/ripgrep`, and then to
-+ * a system `rg` on `PATH` when that platform package does not exist for the
-+ * running platform. Resolving at the call boundary keeps a missing or corrupt
-+ * binary at the first search call as `SEARCH_FAILED`, rather than failing the
-+ * Loader composition.
-  *
-- * @returns the packaged binary's absolute path; the memoized promise rejects
-- *   when the platform package cannot be resolved.
-+ * @returns the binary's absolute path; the memoized promise rejects when
-+ *   neither the packaged platform package nor a system `rg` can be resolved.
-  */
- export function resolveRgPath(): Promise<string> {
-   rgPathPromise ??= Promise.resolve().then(async () => {
-@@ -175,10 +207,22 @@ export function resolveRgPath(): Promise<string> {
-       ? join(executable.dir, `${executable.name}-rg.exe`)
-       : `${process.execPath}-rg`
-     if ('pkg' in process && existsSync(executableSidecar)) return executableSidecar
--    const dependency = (await import('@vscode/ripgrep')).rgPath
--    return process.versions.electron === undefined
--      ? dependency
--      : dependency.replace(/\.asar(?=[\\/])/u, '.asar.unpacked')
-+    let packagedFailure: unknown
-+    try {
-+      const dependency = (await import('@vscode/ripgrep')).rgPath
-+      return process.versions.electron === undefined
-+        ? dependency
-+        : dependency.replace(/\.asar(?=[\\/])/u, '.asar.unpacked')
-+    } catch (error: unknown) {
-+      packagedFailure = error
-+    }
-+    const system = findSystemRg()
-+    if (system !== undefined) return system
-+    throw new SearchError(
-+      `ripgrep is unavailable: the @vscode/ripgrep platform package for ${process.platform}-${process.arch} could not be loaded and no \`rg\` executable was found on PATH`,
-+      'SEARCH_FAILED',
-+      { cause: packagedFailure },
-+    )
-   })
-   return rgPathPromise
- }
 diff --git a/packages/fs/tool-fs-search/tests/rg-path.spec.ts b/packages/fs/tool-fs-search/tests/rg-path.spec.ts
 index 7369ef5..96f08ee 100644
 --- a/packages/fs/tool-fs-search/tests/rg-path.spec.ts
@@ -1152,7 +1053,7 @@ index 7369ef5..96f08ee 100644
 +  })
  })
 diff --git a/packages/fs/tool-fs-search/tests/tools.spec.ts b/packages/fs/tool-fs-search/tests/tools.spec.ts
-index 5763aac..22f0269 100644
+index 41a1510..f92631c 100644
 --- a/packages/fs/tool-fs-search/tests/tools.spec.ts
 +++ b/packages/fs/tool-fs-search/tests/tools.spec.ts
 @@ -24,7 +24,6 @@ import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH, type ToolExecution, type Too
@@ -1163,7 +1064,7 @@ index 5763aac..22f0269 100644
  import { SpillLocator, SpillStore } from '@deepseek-ai/dsh-spill'
  import type { SaveTextSpill, SpillRef } from '@deepseek-ai/dsh-spill'
  import * as ToolFsSearch from '@deepseek-ai/dsh-tool-fs-search'
-@@ -420,7 +419,7 @@ describe('workdir derivation and signal forwarding', () => {
+@@ -426,7 +425,7 @@ describe('workdir derivation and signal forwarding', () => {
      const spec = subprocess.spawns[0]
      // --no-config keeps a host RIPGREP_CONFIG_PATH from injecting a
      // preprocessor into this unconfined spawn.
@@ -1172,7 +1073,7 @@ index 5763aac..22f0269 100644
      expect(spec?.stdio.stdin).toBe('ignore')
      // stdout gets the tool's parse budget; stderr is a diagnostic excerpt;
      // both are the seam's diagnostic-tail shape (no spill files requested).
-@@ -537,13 +536,14 @@ describe('workdir derivation and signal forwarding', () => {
+@@ -543,13 +542,14 @@ describe('workdir derivation and signal forwarding', () => {
      expect(text(result)).toContain('aborted before completion')
    })
  
@@ -1191,7 +1092,7 @@ index 5763aac..22f0269 100644
      expect(resolveRgPath()).toBe(resolveRgPath())
    })
  
-@@ -763,7 +763,7 @@ describe('glob results', () => {
+@@ -775,7 +775,7 @@ describe('glob results', () => {
      subprocess.handler = () => runResult('sub/a.ts\n')
      const result = await call(ctx, 'glob', { pattern: '*.ts', path: 'sub' })
      expect(result.isError).toBe(false)
@@ -1200,6 +1101,85 @@ index 5763aac..22f0269 100644
        '--glob=!**/.git', '--glob=!**/.git/**',
        '--glob=!**/.svn', '--glob=!**/.svn/**',
        '--glob=!**/.hg', '--glob=!**/.hg/**',
+diff --git a/packages/util/ripgrep/src/index.ts b/packages/util/ripgrep/src/index.ts
+index e9ca71e..0e15c66 100644
+--- a/packages/util/ripgrep/src/index.ts
++++ b/packages/util/ripgrep/src/index.ts
+@@ -1,15 +1,47 @@
+ /** Packaged ripgrep resolution and subprocess execution, independent of tool or Remote consumers. */
+-import { existsSync } from 'node:fs'
+-import { join, parse } from 'node:path'
++import { accessSync, constants, existsSync, statSync } from 'node:fs'
++import { delimiter, join, parse } from 'node:path'
+ import type { SubprocessHandle, SubprocessOutcome, SubprocessRuntime, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+ 
+ let rgPathPromise: Promise<string> | undefined
+ 
+ /**
+- * Resolve the packaged executable lazily, once per process. Single-file runtimes use an existing
+- * `-rg` sidecar; Electron uses the unpacked ASAR path. Resolution failures reject
+- * this call, not package loading. No system executable or remote fallback is used.
+- * @returns the packaged executable's absolute path.
++ * Locate a usable `rg` on the ambient `PATH`.
++ *
++ * This is the last resolution tier: a platform whose ABI has no published
++ * `@vscode/ripgrep-<platform>-<arch>` package (notably Android/Termux, where
++ * `process.platform` is `'android'` while the runtime is Linux/arm64) can
++ * still run the packaged search tools when a system ripgrep is installed.
++ * Candidates are probed with `accessSync(X_OK)` so a non-executable or
++ * directory entry is skipped rather than handed to `spawn`.
++ *
++ * @returns the first executable `rg` on `PATH`, or `undefined` when none exists.
++ */
++function findSystemRg(): string | undefined {
++  const directories = (process.env.PATH ?? '').split(delimiter).filter((entry) => entry !== '')
++  const names = process.platform === 'win32' ? ['rg.exe', 'rg'] : ['rg']
++  for (const directory of directories) {
++    for (const name of names) {
++      const candidate = join(directory, name)
++      try {
++        if (!statSync(candidate).isFile()) continue
++        accessSync(candidate, constants.X_OK)
++        return candidate
++      } catch {
++        // Not an executable file here; keep scanning the remaining directories.
++      }
++    }
++  }
++  return undefined
++}
++
++/**
++ * Resolve the ripgrep executable lazily, once per process. Single-file runtimes use an existing
++ * `-rg` sidecar; Electron uses the unpacked ASAR path. A platform whose ABI publishes no
++ * `@vscode/ripgrep-<platform>-<arch>` package (notably Android/Termux, where `process.platform`
++ * is `'android'` while the runtime is Linux/arm64) falls back to a system `rg` on `PATH`.
++ * Resolution failures reject this call, not package loading.
++ * @returns the resolved executable's absolute path.
+  */
+ export function resolveRgPath(): Promise<string> {
+   rgPathPromise ??= Promise.resolve().then(async () => {
+@@ -18,10 +50,16 @@ export function resolveRgPath(): Promise<string> {
+       ? join(executable.dir, `${executable.name}-rg.exe`)
+       : `${process.execPath}-rg`
+     if ('pkg' in process && existsSync(executableSidecar)) return executableSidecar
+-    const dependency = (await import('@vscode/ripgrep')).rgPath
+-    return process.versions.electron === undefined
+-      ? dependency
+-      : dependency.replace(/\.asar(?=[\\/])/u, '.asar.unpacked')
++    try {
++      const dependency = (await import('@vscode/ripgrep')).rgPath
++      return process.versions.electron === undefined
++        ? dependency
++        : dependency.replace(/\.asar(?=[\\/])/u, '.asar.unpacked')
++    } catch (error: unknown) {
++      const systemRg = findSystemRg()
++      if (systemRg === undefined) throw error
++      return systemRg
++    }
+   })
+   return rgPathPromise
+ }
 DSH_EOF_5
 cat > "$TMP/patches/04-session-jsonl.patch" <<'DSH_EOF_6'
 diff --git a/packages/session/session-persistence-jsonl/src/generation.ts b/packages/session/session-persistence-jsonl/src/generation.ts
@@ -3721,14 +3701,14 @@ index e8bb0d4408..66e5506a75 100644
      { "path": "./packages/client/ui-settings/tsconfig.client.json" },
 DSH_EOF_13
 cat > "$TMP/patches/MANIFEST.txt" <<'DSH_EOF_14'
-base_tag=dsh-v0.2.2-rc.1
-base_commit=66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db
-generated=2026-11-06T22:05:00+08:00
+base_tag=dsh-v0.2.2-rc.2
+base_commit=ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c
+generated=2026-11-13T00:43:50+08:00
 repo=/data/data/com.termux/files/usr/tmp/wt-022
 
-24b51da2bec3e13f51141f42bada9aa969c8a254c12fef268e1f2bebdd78837a  01-plugin-manager-hang.patch  3 files
+ef938df51403e3a73a4c38e20c5e234905edcb362b6f1ab9c1ed09c139687d9a  01-plugin-manager-hang.patch  3 files
 de2306ddb8907ca51f942053bc3a9e9e6a1eb82a5a15b5a5796a5d41ced021b6  02-telemetry-rows.patch  4 files
-fce05a2ab8f0a252b6cbe58edf5eb500714b3529ef85a92d78653eefe4c6b636  03-termux-fs.patch  5 files
+ca49992f618ea6b6959a3262edc78bdbae6be3102e41d79f65aef26fb13e5d77  03-termux-fs.patch  5 files
 e2fb1591095a10ba5bc268437e2906ff10f05daf293d0b8971625ccc456a686d  04-session-jsonl.patch  2 files
 c40e45997cfe800a9718bf1dcea4988fe9829da9af1b0d4da4d843286541fa61  05-native-android.patch  4 files
 097d56a9b03d3955c9c88f5d2ea777fe95186c83407ab9a975936d27bc0afd15  06-perf-misc.patch  4 files
