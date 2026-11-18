@@ -8,6 +8,8 @@ MODE=apply
 WITH_ENV=0
 WITH_SHIM=0
 FORCE=0
+TOLERANT=0
+NONCRIT="${DSH_NONCRIT:-02 06 10}"
 SKIP=""
 
 die() { echo "错误: $*" >&2; exit 1; }
@@ -20,9 +22,10 @@ while [ $# -gt 0 ]; do
     --with-env) WITH_ENV=1; shift ;;
     --shim)     WITH_SHIM=1; shift ;;
     --force)    FORCE=1; shift ;;
+    --tolerant) TOLERANT=1; shift ;;
     --skip)     SKIP=",$(echo "${2:?}" | tr ',' ' ' | tr ' ' ',')"; shift 2 ;;
     -h|--help)
-      echo "用法: apply-all-patches.sh [--repo DIR] [--check] [--with-env] [--shim] [--skip 07,08] [--force]"
+      echo "用法: apply-all-patches.sh [--repo DIR] [--check] [--with-env] [--shim] [--skip 07,08] [--force] [--tolerant]"
       exit 0 ;;
     *)          die "未知参数: $1（--help 查看用法）" ;;
   esac
@@ -56,7 +59,21 @@ if [ -n "$BASE_COMMIT" ] && [ "$CUR_COMMIT" != "$BASE_COMMIT" ]; then
   say ""
 fi
 
-applied=0; skipped=0; failed=0; failed_list=""
+applied=0; skipped=0; failed=0; failed_list=""; degraded_list=""
+
+absorbed() {
+  local p="$1" f line total=0 hit=0
+  [ -f "$p" ] || return 1
+  while IFS= read -r f; do
+    [ -f "$REPO/$f" ] || continue
+    while IFS= read -r line; do
+      [ ${#line} -ge 24 ] || continue
+      total=$((total+1))
+      grep -qF -- "$line" "$REPO/$f" 2>/dev/null && hit=$((hit+1))
+    done < <(awk -v tgt="+++ b/$f" 'BEGIN{s=0} $0==tgt{s=1;next} /^\+\+\+ /{s=0} s&&/^\+/&&!/^\+\+\+/{print substr($0,2)}' "$p")
+  done < <(sed -n 's|^+++ b/||p' "$p" | sort -u)
+  [ "$total" -gt 0 ] && [ "$hit" -eq "$total" ]
+}
 
 if [ -n "$BASE_TAG" ] && [ -n "$BASE_COMMIT" ] && ! git -C "$REPO" cat-file -e "${BASE_COMMIT}^{commit}" 2>/dev/null; then
   say "补全基线对象（3-way 合并需要）：$BASE_TAG"
@@ -66,6 +83,28 @@ if [ -n "$BASE_TAG" ] && [ -n "$BASE_COMMIT" ] && ! git -C "$REPO" cat-file -e "
     say "  --  基线对象不可得（离线或标签缺失），将改用宽松方式应用"
   fi
   say ""
+fi
+
+if [ -n "$BASE_TAG" ]; then
+  missing_blobs=$(for p in "$PATCH_DIR"/*.patch; do
+    [ -e "$p" ] || continue
+    sed -n 's/^index [0-9a-f]*\.\.\([0-9a-f]*\).*/\1/p' "$p" | while read -r b; do
+      git -C "$REPO" cat-file -e "$b" 2>/dev/null || printf '.\n'
+    done
+  done | wc -l | tr -d ' ')
+  if [ "${missing_blobs:-0}" -gt 0 ]; then
+    say "补全缺失的基线 blob（3-way 需要，$missing_blobs 个）"
+    git -C "$REPO" fetch -q --no-tags --depth 1 origin "+refs/tags/$BASE_TAG:refs/tags/$BASE_TAG" 2>/dev/null || true
+    git -C "$REPO" fetch -q --no-tags --deepen=64 origin 2>/dev/null || true
+    still=$(for p in "$PATCH_DIR"/*.patch; do
+      [ -e "$p" ] || continue
+      sed -n 's/^index [0-9a-f]*\.\.\([0-9a-f]*\).*/\1/p' "$p" | while read -r b; do
+        git -C "$REPO" cat-file -e "$b" 2>/dev/null || printf '.\n'
+      done
+    done | wc -l | tr -d ' ')
+    say "  $([ "${still:-0}" -eq 0 ] && echo 'ok  全部就位' || echo "--  仍缺 ${still} 个，改用宽松方式")"
+    say ""
+  fi
 fi
 
 E=$(mktemp "${TMPDIR:-$PREFIX/tmp}/dsh-patch.XXXXXX") || die "无法创建临时文件"
@@ -179,9 +218,25 @@ for p in "$PATCH_DIR"/*.patch; do
     restore "$p" "$BAK/snap"
   done
 
+  if [ "$done_ok" -ne 1 ] && absorbed "$p"; then
+    say "  --  $name  跳过（改动已在上游）"
+    skipped=$((skipped+1)); done_ok=1
+  fi
+
   if [ "$done_ok" -ne 1 ]; then
-    say "  !!  $name  无法应用或校验失败：$(tail -3 "$E" | tr '\n' ' ')"
-    failed=$((failed+1)); failed_list="$failed_list $name"
+    degraded=0
+    if [ "$TOLERANT" -eq 1 ]; then
+      case " $NONCRIT " in
+        *" $num "*) degraded=1 ;;
+      esac
+    fi
+    if [ "$degraded" -eq 1 ]; then
+      say "  !!  $name  无法应用（非关键补丁，降级继续）：$(tail -2 "$E" | tr '\n' ' ')"
+      skipped=$((skipped+1)); degraded_list="$degraded_list $name"
+    else
+      say "  !!  $name  无法应用或校验失败：$(tail -3 "$E" | tr '\n' ' ')"
+      failed=$((failed+1)); failed_list="$failed_list $name"
+    fi
   fi
 done
 rm -rf "$BAK" "$E"
@@ -193,6 +248,10 @@ else
   say "  !! 后处理跳过（REPO 不对）"
 fi
 say "补丁结果: 应用 $applied / 跳过 $skipped / 失败 $failed"
+if [ -n "$degraded_list" ]; then
+  say "降级补丁:$degraded_list"
+  say "说明: 这些补丁本次无法应用，已跳过继续构建；对应修复不在本包内。"
+fi
 if [ "$MODE" = apply ] && [ "$applied" -gt 0 ]; then
   say "提示: --3way 会把改动放进暂存区；想恢复成普通未暂存改动，执行 git -C \"$REPO\" reset -q"
 fi
