@@ -82,6 +82,7 @@ jobs:
           name: deb
           path: dist/*.deb
           if-no-files-found: error
+          retention-days: 1
   s3:
     needs: s1
     if: needs.s1.outputs.go == '1' && vars.BUILD_MODE == 'docker'
@@ -99,6 +100,7 @@ jobs:
           name: deb
           path: dist/*.deb
           if-no-files-found: error
+          retention-days: 1
   s4:
     needs: [s1, s2, s3]
     if: always() && needs.s1.outputs.go == '1' && (needs.s2.result == 'success' || needs.s3.result == 'success')
